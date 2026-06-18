@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { setCurrentBookerCookie } from "@/lib/identity";
 import { sweepExpiredBookings } from "@/lib/release";
+import { bbox, rectToPoints, type Point } from "@/lib/floor";
 
 function revalidateAll() {
   revalidatePath("/");
@@ -83,7 +84,7 @@ export async function cancelBooking(bookingId: string) {
 // ---- Admin: layout (bulk positions for desks + zones) ----------------------
 export async function saveLayout(input: {
   desks: { id: string; x: number; y: number }[];
-  zones: { id: string; x: number; y: number; width: number; height: number }[];
+  zones: { id: string; points: Point[] }[];
 }) {
   await prisma.$transaction([
     ...input.desks.map((d) =>
@@ -92,12 +93,20 @@ export async function saveLayout(input: {
         data: { x: d.x, y: d.y },
       }),
     ),
-    ...input.zones.map((z) =>
-      prisma.zone.update({
+    ...input.zones.map((z) => {
+      const box = bbox(z.points);
+      return prisma.zone.update({
         where: { id: z.id },
-        data: { x: z.x, y: z.y, width: z.width, height: z.height },
-      }),
-    ),
+        // Persist the polygon and keep the bounding box in sync.
+        data: {
+          points: JSON.stringify(z.points),
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+        },
+      });
+    }),
   ]);
   revalidateAll();
 }
@@ -161,16 +170,21 @@ export async function createZone(input: {
   type: string;
   color: string;
 }) {
+  const x = 60;
+  const y = 60;
+  const width = 300;
+  const height = 220;
   await prisma.zone.create({
     data: {
       premiseId: input.premiseId,
       name: input.name,
       type: input.type,
       color: input.color,
-      x: 60,
-      y: 60,
-      width: 300,
-      height: 220,
+      x,
+      y,
+      width,
+      height,
+      points: JSON.stringify(rectToPoints(x, y, width, height)),
     },
   });
   revalidateAll();

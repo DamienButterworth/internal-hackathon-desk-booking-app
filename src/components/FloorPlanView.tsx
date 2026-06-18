@@ -2,17 +2,21 @@
 
 import clsx from "clsx";
 import { CanvasFrame } from "./CanvasFrame";
-import { DESK_W, DESK_H, DESK_STATE_STYLE, zoneVisual } from "@/lib/floor";
-import type { DeskState } from "@/lib/floor";
+import {
+  DESK_W,
+  DESK_H,
+  DESK_STATE_STYLE,
+  zoneVisual,
+  pointsToAttr,
+  labelAnchor,
+} from "@/lib/floor";
+import type { DeskState, Point } from "@/lib/floor";
 
 export type ZoneVM = {
   id: string;
   name: string;
   type: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+  points: Point[];
 };
 
 export type DeskVM = {
@@ -42,30 +46,40 @@ export function FloorPlanView({
     <CanvasFrame mapWidth={mapWidth} mapHeight={mapHeight}>
       {() => (
         <>
-          {zones.map((z) => {
-            const v = zoneVisual(z.type);
-            return (
-              <div
-                key={z.id}
-                className="absolute rounded-xl"
-                style={{
-                  left: z.x,
-                  top: z.y,
-                  width: z.width,
-                  height: z.height,
-                  background: v.tint,
-                  border: `1.5px dashed ${v.color}`,
-                }}
-              >
-                <span
-                  className="absolute left-3 top-2 inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold"
-                  style={{ background: v.color, color: "#fff" }}
-                >
-                  {z.name}
-                </span>
-              </div>
-            );
-          })}
+          <svg
+            className="pointer-events-none absolute left-0 top-0"
+            width={mapWidth}
+            height={mapHeight}
+          >
+            {zones.map((z) => {
+              const v = zoneVisual(z.type);
+              const anchor = labelAnchor(z.points);
+              return (
+                <g key={z.id}>
+                  <polygon
+                    points={pointsToAttr(z.points)}
+                    fill={v.tint}
+                    stroke={v.color}
+                    strokeWidth={1.5}
+                    strokeDasharray="6 4"
+                  />
+                  <foreignObject
+                    x={anchor.x + 8}
+                    y={anchor.y + 8}
+                    width={Math.max(60, z.name.length * 8 + 24)}
+                    height={24}
+                  >
+                    <span
+                      className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold"
+                      style={{ background: v.color, color: "#fff" }}
+                    >
+                      {z.name}
+                    </span>
+                  </foreignObject>
+                </g>
+              );
+            })}
+          </svg>
 
           {desks.map((d) => {
             const s = DESK_STATE_STYLE[d.state];

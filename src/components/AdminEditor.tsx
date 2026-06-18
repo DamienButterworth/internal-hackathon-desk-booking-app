@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { FloorPlanEditor, type Selection } from "./FloorPlanEditor";
+import type { Point } from "@/lib/floor";
 import {
   ZONE_TYPES,
   ZONE_META,
@@ -45,10 +46,7 @@ type ZoneRecord = {
   name: string;
   type: string;
   color: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+  points: Point[];
 };
 
 export function AdminEditor({
@@ -107,13 +105,7 @@ export function AdminEditor({
   async function persistLayout() {
     await saveLayout({
       desks: desks.map((d) => ({ id: d.id, x: d.x, y: d.y })),
-      zones: zones.map((z) => ({
-        id: z.id,
-        x: z.x,
-        y: z.y,
-        width: z.width,
-        height: z.height,
-      })),
+      zones: zones.map((z) => ({ id: z.id, points: z.points })),
     });
   }
 
@@ -143,7 +135,8 @@ export function AdminEditor({
         <div className="mr-auto">
           <h1 className="text-xl font-semibold text-ink">Floor plan editor</h1>
           <p className="text-sm text-muted">
-            {premiseName} · drag desks &amp; zones, then save
+            {premiseName} · drag desks &amp; zones, reshape zone corners, then
+            save
           </p>
         </div>
         <button
@@ -197,8 +190,8 @@ export function AdminEditor({
           desks={desks}
           selection={selection}
           onSelect={setSelection}
-          onZoneChange={(id, box) => {
-            patchZone(id, box);
+          onZoneChange={(id, points) => {
+            patchZone(id, { points });
             setDirty(true);
           }}
           onDeskChange={(id, pos) => {
@@ -386,6 +379,11 @@ export function AdminEditor({
                   {ZONE_META[(selZone.type as ZoneType)]?.hint}
                 </p>
               </div>
+              <p className="rounded-lg bg-brand-tint px-3 py-2 text-xs text-ink-soft">
+                Drag corner handles to reshape. Click a{" "}
+                <span className="font-semibold">+</span> on an edge to add a
+                corner; double-click a corner to remove it.
+              </p>
             </div>
           )}
         </aside>

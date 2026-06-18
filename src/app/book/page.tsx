@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentBooker } from "@/lib/identity";
 import { sweepExpiredBookings } from "@/lib/release";
 import { parseTags } from "@/lib/types";
+import { zonePoints } from "@/lib/floor";
 import { isoDate } from "@/lib/time";
 import { BookingBoard } from "@/components/BookingBoard";
 import { AutoReleasePoller } from "@/components/AutoReleasePoller";
@@ -68,10 +69,7 @@ export default async function BookPage() {
     id: z.id,
     name: z.name,
     type: z.type,
-    x: z.x,
-    y: z.y,
-    width: z.width,
-    height: z.height,
+    points: zonePoints(z),
   }));
 
   return (

@@ -31,10 +31,13 @@ model Zone {
   name      String
   type      String     @default("FOCUS") // QUIET | COLLAB | STANDING | FOCUS | SOCIAL
   color     String     @default("#14b8a6")
+  // Bounding box — kept in sync with `points` for legacy/query use.
   x         Float      @default(40)
   y         Float      @default(40)
   width     Float      @default(280)
   height    Float      @default(220)
+  // JSON-encoded polygon outline, e.g. [{"x":40,"y":40},...]. Empty = use bbox.
+  points    String     @default("[]")
   bookables Bookable[]
 }
 

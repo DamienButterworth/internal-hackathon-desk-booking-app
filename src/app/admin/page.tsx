@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentBooker } from "@/lib/identity";
 import { parseTags } from "@/lib/types";
+import { zonePoints } from "@/lib/floor";
 import { AdminEditor } from "@/components/AdminEditor";
 
 export default async function AdminPage() {
@@ -32,10 +33,7 @@ export default async function AdminPage() {
     name: z.name,
     type: z.type,
     color: z.color,
-    x: z.x,
-    y: z.y,
-    width: z.width,
-    height: z.height,
+    points: zonePoints(z),
   }));
 
   return (

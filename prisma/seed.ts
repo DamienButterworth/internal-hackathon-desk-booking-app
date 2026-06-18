@@ -198,16 +198,27 @@ async function main() {
   }
 
   // Two meeting rooms in the right-hand strip (SOCIAL / breakout area).
+  // Drawn as an angled polygon to show zones aren't limited to rectangles.
+  const breakoutPoints = [
+    { x: 920, y: 70 },
+    { x: 1160, y: 130 },
+    { x: 1160, y: 680 },
+    { x: 1060, y: 740 },
+    { x: 920, y: 740 },
+  ];
+  const bx = breakoutPoints.map((p) => p.x);
+  const by = breakoutPoints.map((p) => p.y);
   await prisma.zone.create({
     data: {
       premiseId: premise.id,
       name: "Breakout & Rooms",
       type: "SOCIAL",
       color: "#ec4899",
-      x: 920,
-      y: 70,
-      width: 240,
-      height: 670,
+      x: Math.min(...bx),
+      y: Math.min(...by),
+      width: Math.max(...bx) - Math.min(...bx),
+      height: Math.max(...by) - Math.min(...by),
+      points: JSON.stringify(breakoutPoints),
     },
   });
   const rooms = [
