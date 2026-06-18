@@ -1,0 +1,89 @@
+// Deskly — Mercator desk booking POC
+// SQLite + Prisma. Maps the four core entities (Premise, Bookable, Booking,
+// Booker) plus Zone (map geometry) and AppSettings (auto-release config).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Premise {
+  id            String     @id @default(cuid())
+  name          String
+  address       String
+  // mapView = the canvas the floor plan is drawn on
+  mapWidth      Int        @default(1200)
+  mapHeight     Int        @default(800)
+  backgroundUrl String?
+  zones         Zone[]
+  bookables     Bookable[]
+  createdAt     DateTime   @default(now())
+}
+
+model Zone {
+  id        String     @id @default(cuid())
+  premise   Premise    @relation(fields: [premiseId], references: [id], onDelete: Cascade)
+  premiseId String
+  name      String
+  type      String     @default("FOCUS") // QUIET | COLLAB | STANDING | FOCUS | SOCIAL
+  color     String     @default("#14b8a6")
+  x         Float      @default(40)
+  y         Float      @default(40)
+  width     Float      @default(280)
+  height    Float      @default(220)
+  bookables Bookable[]
+}
+
+model Bookable {
+  id              String    @id @default(cuid())
+  premise         Premise   @relation(fields: [premiseId], references: [id], onDelete: Cascade)
+  premiseId       String
+  zone            Zone?     @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  zoneId          String?
+  name            String
+  type            String    @default("DESK") // DESK | ROOM
+  isAvailable     Boolean   @default(true)
+  // JSON-encoded availability windows, e.g. [{"day":"MON","from":"09:00","to":"18:00"}]
+  timesAvailable  String    @default("[]")
+  // contentDescriptionTags — JSON string[] e.g. ["monitor","standing","window"]
+  tags            String    @default("[]")
+  textDescription String    @default("")
+  x               Float     @default(100)
+  y               Float     @default(100)
+  bookings        Booking[] @relation("BookingBookables")
+}
+
+model Booker {
+  id       String    @id @default(cuid())
+  email    String    @unique
+  name     String
+  team     String
+  role     String    @default("USER") // USER | ADMIN
+  bookings Booking[]
+}
+
+model Booking {
+  id              String     @id @default(cuid())
+  booker          Booker     @relation(fields: [bookerId], references: [id], onDelete: Cascade)
+  bookerId        String
+  bookables       Bookable[] @relation("BookingBookables")
+  date            String     // ISO date "2026-06-18" (the day booked)
+  startTime       String     @default("09:00")
+  endTime         String     @default("17:00")
+  repeat          String     @default("NONE") // NONE | DAILY | WEEKLY
+  bookingTitle    String     @default("")
+  bookingGuidance String     @default("")
+  status          String     @default("RESERVED") // RESERVED | CHECKED_IN | CHECKED_OUT | RELEASED
+  checkInAt       DateTime?
+  checkOutAt      DateTime?
+  createdAt       DateTime   @default(now())
+}
+
+model AppSettings {
+  id                 String @id @default("singleton")
+  autoReleaseMinutes Int    @default(30)
+}

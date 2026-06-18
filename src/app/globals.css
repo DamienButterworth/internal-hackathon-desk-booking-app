@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/* Deskly — Mercator-inspired theme.                                   */
+/* Clean teal/navy corporate palette. Swap the hex values below to     */
+/* match exact brand guidelines; everything else reads these tokens.   */
+/* ------------------------------------------------------------------ */
+@theme {
+  --color-ink: #0b2b33; /* deep teal-navy — primary text & dark surfaces */
+  --color-ink-soft: #294b53;
+  --color-muted: #5f7178; /* secondary text */
+  --color-line: #e2e9ea; /* hairline borders */
+  --color-surface: #eef3f4; /* app background */
+  --color-card: #ffffff;
+  --color-brand: #0d9488; /* Mercator teal */
+  --color-brand-strong: #0f766e;
+  --color-brand-tint: #d8f1ee;
+  --color-accent: #f59e0b; /* amber — reserved / attention */
+  --color-danger: #ef4444;
+  --color-good: #14b8a6;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --radius: 0.75rem;
+}
+
+* {
+  border-color: var(--color-line);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Reusable building blocks -------------------------------------------------- */
+@layer components {
+  .card {
+    background: var(--color-card);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    box-shadow: 0 1px 2px rgba(11, 43, 51, 0.04);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border-radius: 0.6rem;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1;
+    transition: all 0.15s ease;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--color-brand);
+    color: #fff;
+  }
+  .btn-primary:hover {
+    background: var(--color-brand-strong);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--color-ink-soft);
+    border: 1px solid var(--color-line);
+  }
+  .btn-ghost:hover {
+    background: var(--color-surface);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border-radius: 999px;
+    padding: 0.18rem 0.6rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: var(--color-surface);
+    color: var(--color-ink-soft);
+    border: 1px solid var(--color-line);
+  }
+
+  .field {
+    width: 100%;
+    border-radius: 0.6rem;
+    border: 1px solid var(--color-line);
+    background: #fff;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.875rem;
+    color: var(--color-ink);
+  }
+  .field:focus {
+    outline: 2px solid var(--color-brand);
+    outline-offset: -1px;
+  }
+  .label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-muted);
+  }
+}
+
+/* Thin, tidy scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cdd9da;
+  border-radius: 999px;
+  border: 2px solid var(--color-surface);
+}
