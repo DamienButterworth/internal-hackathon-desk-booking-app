@@ -10,6 +10,8 @@ import {
   Armchair,
   Check,
   Info,
+  Image as ImageIcon,
+  X,
 } from "lucide-react";
 import clsx from "clsx";
 import { FloorPlanEditor, type Selection } from "./FloorPlanEditor";
@@ -28,6 +30,7 @@ import {
   createZone,
   deleteBookable,
   deleteZone,
+  updatePremiseBackground,
 } from "@/server/actions";
 
 type DeskRecord = {
@@ -54,6 +57,7 @@ export function AdminEditor({
   premiseName,
   mapWidth,
   mapHeight,
+  backgroundUrl,
   initialDesks,
   initialZones,
 }: {
@@ -61,6 +65,7 @@ export function AdminEditor({
   premiseName: string;
   mapWidth: number;
   mapHeight: number;
+  backgroundUrl: string | null;
   initialDesks: DeskRecord[];
   initialZones: ZoneRecord[];
 }) {
@@ -70,6 +75,53 @@ export function AdminEditor({
   const [selection, setSelection] = useState<Selection>(null);
   const [dirty, setDirty] = useState(false);
   const [pending, startTransition] = useTransition();
+  const [background, setBackground] = useState<string | null>(backgroundUrl);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Read the chosen image, downscale it to the map's coordinate space (it is
+  // rendered object-contain anyway), and persist the compact data URL inline on
+  // the premise. Downscaling keeps the payload well under the server-action body
+  // size limit even for large source images.
+  function handleBackgroundFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const ratio = Math.min(
+          1,
+          mapWidth / img.width,
+          mapHeight / img.height,
+        );
+        const w = Math.round(img.width * ratio);
+        const h = Math.round(img.height * ratio);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, w, h);
+        // PNG preserves transparency for line drawings; JPEG is smaller for
+        // photos. Prefer JPEG unless the source is already a PNG/SVG.
+        const useJpeg = !/png|svg/i.test(file.type);
+        const dataUrl = canvas.toDataURL(
+          useJpeg ? "image/jpeg" : "image/png",
+          0.85,
+        );
+        setBackground(dataUrl);
+        startTransition(() => updatePremiseBackground(premiseId, dataUrl));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function clearBackground() {
+    setBackground(null);
+    startTransition(() => updatePremiseBackground(premiseId, null));
+  }
 
   // Re-sync from the server after structural changes (add/delete) refresh.
   const sig = useRef("");
@@ -156,6 +208,30 @@ export function AdminEditor({
         >
           <Armchair size={15} /> Add desk
         </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleBackgroundFile}
+        />
+        <button
+          className="btn btn-ghost"
+          disabled={pending}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ImageIcon size={15} /> {background ? "Replace background" : "Background"}
+        </button>
+        {background && (
+          <button
+            className="btn btn-ghost text-danger"
+            disabled={pending}
+            title="Remove background image"
+            onClick={clearBackground}
+          >
+            <X size={15} /> Clear
+          </button>
+        )}
         <button
           className="btn btn-ghost"
           disabled={pending}
@@ -186,6 +262,7 @@ export function AdminEditor({
         <FloorPlanEditor
           mapWidth={mapWidth}
           mapHeight={mapHeight}
+          backgroundUrl={background}
           zones={zones}
           desks={desks}
           selection={selection}

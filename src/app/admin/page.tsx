@@ -42,6 +42,7 @@ export default async function AdminPage() {
       premiseName={premise.name}
       mapWidth={premise.mapWidth}
       mapHeight={premise.mapHeight}
+      backgroundUrl={premise.backgroundUrl}
       initialDesks={desks}
       initialZones={zones}
     />

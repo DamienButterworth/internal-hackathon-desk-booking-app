@@ -8,10 +8,12 @@ import { useEffect, useRef, useState } from "react";
 export function CanvasFrame({
   mapWidth,
   mapHeight,
+  backgroundUrl,
   children,
 }: {
   mapWidth: number;
   mapHeight: number;
+  backgroundUrl?: string | null;
   children: (scale: number) => React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -48,6 +50,15 @@ export function CanvasFrame({
           transform: `scale(${scale})`,
         }}
       >
+        {backgroundUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={backgroundUrl}
+            alt=""
+            className="pointer-events-none absolute left-0 top-0 h-full w-full object-contain"
+            style={{ zIndex: 0 }}
+          />
+        )}
         {children(scale)}
       </div>
     </div>

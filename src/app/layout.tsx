@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
+import { ChatWidget } from "@/components/ChatWidget";
 import { getCurrentBooker } from "@/lib/identity";
 
 const inter = Inter({
@@ -35,6 +36,7 @@ export default async function RootLayout({
           }
         />
         <main className="flex-1">{children}</main>
+        {booker ? <ChatWidget /> : null}
       </body>
     </html>
   );

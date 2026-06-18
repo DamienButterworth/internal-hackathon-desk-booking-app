@@ -46,6 +46,7 @@ type Drag = {
 export function FloorPlanEditor({
   mapWidth,
   mapHeight,
+  backgroundUrl,
   zones,
   desks,
   selection,
@@ -55,6 +56,7 @@ export function FloorPlanEditor({
 }: {
   mapWidth: number;
   mapHeight: number;
+  backgroundUrl?: string | null;
   zones: EditZone[];
   desks: EditDesk[];
   selection: Selection;
@@ -152,7 +154,11 @@ export function FloorPlanEditor({
   }
 
   return (
-    <CanvasFrame mapWidth={mapWidth} mapHeight={mapHeight}>
+    <CanvasFrame
+      mapWidth={mapWidth}
+      mapHeight={mapHeight}
+      backgroundUrl={backgroundUrl}
+    >
       {(scale) => {
         scaleRef.current = scale;
         return (

@@ -79,6 +79,7 @@ export default async function BookPage() {
         me={{ id: booker.id, name: booker.name, team: booker.team }}
         mapWidth={premise.mapWidth}
         mapHeight={premise.mapHeight}
+        backgroundUrl={premise.backgroundUrl}
         zones={zones}
         desks={desks}
         occupancy={occupancy}

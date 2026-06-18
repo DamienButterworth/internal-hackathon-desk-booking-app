@@ -221,3 +221,13 @@ export async function updatePremise(
   await prisma.premise.update({ where: { id }, data });
   revalidateAll();
 }
+
+// Set (or clear, with null) the floor-plan background image. Stored inline as a
+// data URL so the POC needs no file storage / static-asset pipeline.
+export async function updatePremiseBackground(
+  id: string,
+  backgroundUrl: string | null,
+) {
+  await prisma.premise.update({ where: { id }, data: { backgroundUrl } });
+  revalidateAll();
+}

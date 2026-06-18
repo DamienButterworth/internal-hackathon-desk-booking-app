@@ -41,6 +41,7 @@ export function BookingBoard({
   me,
   mapWidth,
   mapHeight,
+  backgroundUrl,
   zones,
   desks,
   occupancy,
@@ -49,6 +50,7 @@ export function BookingBoard({
   me: { id: string; name: string; team: string };
   mapWidth: number;
   mapHeight: number;
+  backgroundUrl?: string | null;
   zones: ZoneVM[];
   desks: Desk[];
   occupancy: Occupancy;
@@ -218,6 +220,7 @@ export function BookingBoard({
         <FloorPlanView
           mapWidth={mapWidth}
           mapHeight={mapHeight}
+          backgroundUrl={backgroundUrl}
           zones={zones}
           desks={deskVMs}
           onSelectDesk={(id) => setOpenDeskId(id)}

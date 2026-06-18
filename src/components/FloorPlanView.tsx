@@ -32,18 +32,24 @@ export type DeskVM = {
 export function FloorPlanView({
   mapWidth,
   mapHeight,
+  backgroundUrl,
   zones,
   desks,
   onSelectDesk,
 }: {
   mapWidth: number;
   mapHeight: number;
+  backgroundUrl?: string | null;
   zones: ZoneVM[];
   desks: DeskVM[];
   onSelectDesk?: (id: string) => void;
 }) {
   return (
-    <CanvasFrame mapWidth={mapWidth} mapHeight={mapHeight}>
+    <CanvasFrame
+      mapWidth={mapWidth}
+      mapHeight={mapHeight}
+      backgroundUrl={backgroundUrl}
+    >
       {() => (
         <>
           <svg
