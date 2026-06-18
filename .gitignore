@@ -1,5 +1,6 @@
 # Environment & secrets — NEVER commit your API key
 .env
+.next/
 .env.*
 *.key
 secrets.*
@@ -33,3 +34,4 @@ Thumbs.db
 
 # Claude Code local config
 .claude/
+/.next/
