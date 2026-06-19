@@ -13,6 +13,7 @@ export default async function AdminPage() {
     include: {
       zones: { orderBy: { name: "asc" } },
       bookables: { orderBy: { name: "asc" } },
+      fixtures: true,
     },
   });
   if (!premise) redirect("/");
@@ -35,6 +36,16 @@ export default async function AdminPage() {
     color: z.color,
     points: zonePoints(z),
   }));
+  const fixtures = premise.fixtures.map((f) => ({
+    id: f.id,
+    type: f.type,
+    label: f.label,
+    x: f.x,
+    y: f.y,
+    width: f.width,
+    height: f.height,
+    rotation: f.rotation,
+  }));
 
   return (
     <AdminEditor
@@ -45,6 +56,7 @@ export default async function AdminPage() {
       backgroundUrl={premise.backgroundUrl}
       initialDesks={desks}
       initialZones={zones}
+      initialFixtures={fixtures}
     />
   );
 }

@@ -112,6 +112,83 @@ export function pointsToAttr(points: Point[]): string {
   return points.map((p) => `${p.x},${p.y}`).join(" ");
 }
 
+// Derives a movable canvas window from the outer bounds of every entity so the
+// office grows in any direction (incl. negative/up-left coordinates) instead of
+// being capped at a fixed premise box. Returns the world-space origin (top-left,
+// may be negative) plus the span. `pad` leaves slack on every side (drag-room in
+// the editor); `minWidth/minHeight` (the premise size) act as a floor.
+type DeskLike = { x: number; y: number; type: string };
+type ZoneLike = { points: Point[] };
+type FixtureLike = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+};
+
+export function layoutCanvasSize(
+  desks: DeskLike[],
+  zones: ZoneLike[],
+  fixtures: FixtureLike[],
+  opts: { pad?: number; minWidth?: number; minHeight?: number } = {},
+): { originX: number; originY: number; width: number; height: number } {
+  const { pad = 0, minWidth = 0, minHeight = 0 } = opts;
+  // Seed at 0,0 so the premise origin is always included in the window.
+  let minX = 0;
+  let minY = 0;
+  let maxX = 0;
+  let maxY = 0;
+  const acc = (x: number, y: number) => {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  };
+  for (const d of desks) {
+    const isRoom = d.type === "ROOM";
+    acc(d.x, d.y);
+    acc(d.x + (isRoom ? DESK_W + 60 : DESK_W), d.y + (isRoom ? DESK_H + 70 : DESK_H));
+  }
+  for (const z of zones) {
+    for (const p of z.points) acc(p.x, p.y);
+  }
+  for (const f of fixtures) {
+    // Account for rotation: the AABB of a rotated rectangle about its centre.
+    const r = ((f.rotation || 0) * Math.PI) / 180;
+    const hx =
+      Math.abs(Math.cos(r) * (f.width / 2)) +
+      Math.abs(Math.sin(r) * (f.height / 2));
+    const hy =
+      Math.abs(Math.sin(r) * (f.width / 2)) +
+      Math.abs(Math.cos(r) * (f.height / 2));
+    const cx = f.x + f.width / 2;
+    const cy = f.y + f.height / 2;
+    acc(cx - hx, cy - hy);
+    acc(cx + hx, cy + hy);
+  }
+  minX -= pad;
+  minY -= pad;
+  maxX += pad;
+  maxY += pad;
+  let width = maxX - minX;
+  let height = maxY - minY;
+  if (width < minWidth) {
+    maxX += minWidth - width;
+    width = minWidth;
+  }
+  if (height < minHeight) {
+    maxY += minHeight - height;
+    height = minHeight;
+  }
+  return {
+    originX: Math.floor(minX),
+    originY: Math.floor(minY),
+    width: Math.ceil(width),
+    height: Math.ceil(height),
+  };
+}
+
 export function bbox(points: Point[]) {
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);

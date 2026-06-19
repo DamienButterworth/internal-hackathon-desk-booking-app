@@ -21,7 +21,24 @@ model Premise {
   backgroundUrl String?
   zones         Zone[]
   bookables     Bookable[]
+  fixtures      Fixture[]
   createdAt     DateTime   @default(now())
+}
+
+// Non-bookable layout elements: walls, doors, windows, toilets, fire exits,
+// stairs, plants, etc. Pure map decoration — drawn as a positioned, sizable,
+// rotatable box. `type` selects the visual from FIXTURE_META.
+model Fixture {
+  id        String  @id @default(cuid())
+  premise   Premise @relation(fields: [premiseId], references: [id], onDelete: Cascade)
+  premiseId String
+  type      String  @default("WALL")
+  label     String  @default("")
+  x         Float   @default(120)
+  y         Float   @default(120)
+  width     Float   @default(160)
+  height    Float   @default(16)
+  rotation  Float   @default(0)
 }
 
 model Zone {

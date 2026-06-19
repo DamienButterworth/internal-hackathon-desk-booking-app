@@ -85,12 +85,32 @@ export async function cancelBooking(bookingId: string) {
 export async function saveLayout(input: {
   desks: { id: string; x: number; y: number }[];
   zones: { id: string; points: Point[] }[];
+  fixtures?: {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+  }[];
 }) {
   await prisma.$transaction([
     ...input.desks.map((d) =>
       prisma.bookable.update({
         where: { id: d.id },
         data: { x: d.x, y: d.y },
+      }),
+    ),
+    ...(input.fixtures ?? []).map((f) =>
+      prisma.fixture.update({
+        where: { id: f.id },
+        data: {
+          x: f.x,
+          y: f.y,
+          width: f.width,
+          height: f.height,
+          rotation: f.rotation,
+        },
       }),
     ),
     ...input.zones.map((z) => {
@@ -202,6 +222,119 @@ export async function deleteZone(id: string) {
   // Desks in the zone are kept (zoneId set null via schema relation).
   await prisma.zone.delete({ where: { id } });
   revalidateAll();
+}
+
+// ---- Admin: fixtures (walls, doors, toilets, fire exits, …) ----------------
+export async function createFixture(input: {
+  premiseId: string;
+  type: string;
+  label?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) {
+  await prisma.fixture.create({
+    data: {
+      premiseId: input.premiseId,
+      type: input.type,
+      label: input.label ?? "",
+      x: input.x,
+      y: input.y,
+      width: input.width,
+      height: input.height,
+    },
+  });
+  revalidateAll();
+}
+
+export async function updateFixture(
+  id: string,
+  data: {
+    type?: string;
+    label?: string;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    rotation?: number;
+  },
+) {
+  await prisma.fixture.update({ where: { id }, data });
+  revalidateAll();
+}
+
+export async function deleteFixture(id: string) {
+  await prisma.fixture.delete({ where: { id } });
+  revalidateAll();
+}
+
+// ---- Admin: duplicate (Ctrl/Cmd+D in the editor) ---------------------------
+// Each clones the source record offset by DUP_OFFSET so the copy is visible,
+// and returns the new id so the editor can re-select it after refresh.
+const DUP_OFFSET = 24;
+
+export async function duplicateBookable(id: string): Promise<string | null> {
+  const src = await prisma.bookable.findUnique({ where: { id } });
+  if (!src) return null;
+  const copy = await prisma.bookable.create({
+    data: {
+      premiseId: src.premiseId,
+      zoneId: src.zoneId,
+      name: `${src.name} copy`,
+      type: src.type,
+      isAvailable: src.isAvailable,
+      tags: src.tags,
+      textDescription: src.textDescription,
+      x: src.x + DUP_OFFSET,
+      y: src.y + DUP_OFFSET,
+    },
+  });
+  revalidateAll();
+  return copy.id;
+}
+
+export async function duplicateFixture(id: string): Promise<string | null> {
+  const src = await prisma.fixture.findUnique({ where: { id } });
+  if (!src) return null;
+  const copy = await prisma.fixture.create({
+    data: {
+      premiseId: src.premiseId,
+      type: src.type,
+      label: src.label,
+      width: src.width,
+      height: src.height,
+      rotation: src.rotation,
+      x: src.x + DUP_OFFSET,
+      y: src.y + DUP_OFFSET,
+    },
+  });
+  revalidateAll();
+  return copy.id;
+}
+
+export async function duplicateZone(id: string): Promise<string | null> {
+  const src = await prisma.zone.findUnique({ where: { id } });
+  if (!src) return null;
+  const pts = (JSON.parse(src.points) as Point[]).map((p) => ({
+    x: p.x + DUP_OFFSET,
+    y: p.y + DUP_OFFSET,
+  }));
+  const copy = await prisma.zone.create({
+    data: {
+      premiseId: src.premiseId,
+      name: `${src.name} copy`,
+      type: src.type,
+      color: src.color,
+      x: src.x + DUP_OFFSET,
+      y: src.y + DUP_OFFSET,
+      width: src.width,
+      height: src.height,
+      points: JSON.stringify(pts),
+    },
+  });
+  revalidateAll();
+  return copy.id;
 }
 
 // ---- Admin: settings -------------------------------------------------------

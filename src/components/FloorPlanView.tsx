@@ -1,11 +1,14 @@
 "use client";
 
+import { useMemo } from "react";
 import clsx from "clsx";
 import { CanvasFrame } from "./CanvasFrame";
+import { FixtureShape } from "./FixtureShape";
 import {
   DESK_W,
   DESK_H,
   DESK_STATE_STYLE,
+  layoutCanvasSize,
   zoneVisual,
   pointsToAttr,
   labelAnchor,
@@ -17,6 +20,17 @@ export type ZoneVM = {
   name: string;
   type: string;
   points: Point[];
+};
+
+export type FixtureVM = {
+  id: string;
+  type: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
 };
 
 export type DeskVM = {
@@ -35,6 +49,7 @@ export function FloorPlanView({
   backgroundUrl,
   zones,
   desks,
+  fixtures = [],
   onSelectDesk,
 }: {
   mapWidth: number;
@@ -42,20 +57,51 @@ export function FloorPlanView({
   backgroundUrl?: string | null;
   zones: ZoneVM[];
   desks: DeskVM[];
+  fixtures?: FixtureVM[];
   onSelectDesk?: (id: string) => void;
 }) {
+  // Size the canvas to the office layout (premise size as a floor) so it shows
+  // the whole plan with no arbitrary cap, matching the editor.
+  const size = useMemo(
+    () =>
+      layoutCanvasSize(desks, zones, fixtures, {
+        pad: 40,
+        minWidth: mapWidth,
+        minHeight: mapHeight,
+      }),
+    [desks, zones, fixtures, mapWidth, mapHeight],
+  );
+
   return (
     <CanvasFrame
-      mapWidth={mapWidth}
-      mapHeight={mapHeight}
-      backgroundUrl={backgroundUrl}
+      mapWidth={size.width}
+      mapHeight={size.height}
+      originX={size.originX}
+      originY={size.originY}
+      zoomable
     >
       {() => (
         <>
+          {backgroundUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={backgroundUrl}
+              alt=""
+              className="pointer-events-none absolute object-contain"
+              style={{
+                left: size.originX,
+                top: size.originY,
+                width: size.width,
+                height: size.height,
+                zIndex: 0,
+              }}
+            />
+          )}
           <svg
             className="pointer-events-none absolute left-0 top-0"
-            width={mapWidth}
-            height={mapHeight}
+            width={size.width}
+            height={size.height}
+            style={{ overflow: "visible" }}
           >
             {zones.map((z) => {
               const v = zoneVisual(z.type);
@@ -86,6 +132,22 @@ export function FloorPlanView({
               );
             })}
           </svg>
+
+          {fixtures.map((f) => (
+            <div
+              key={f.id}
+              className="pointer-events-none absolute"
+              style={{
+                left: f.x,
+                top: f.y,
+                width: f.width,
+                height: f.height,
+                transform: f.rotation ? `rotate(${f.rotation}deg)` : undefined,
+              }}
+            >
+              <FixtureShape type={f.type} label={f.label} />
+            </div>
+          ))}
 
           {desks.map((d) => {
             const s = DESK_STATE_STYLE[d.state];

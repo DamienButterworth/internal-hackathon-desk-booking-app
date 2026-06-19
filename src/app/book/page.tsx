@@ -21,6 +21,7 @@ export default async function BookPage() {
     include: {
       zones: { orderBy: { name: "asc" } },
       bookables: { orderBy: { name: "asc" } },
+      fixtures: true,
     },
   });
   if (!premise) redirect("/");
@@ -71,6 +72,16 @@ export default async function BookPage() {
     type: z.type,
     points: zonePoints(z),
   }));
+  const fixtures = premise.fixtures.map((f) => ({
+    id: f.id,
+    type: f.type,
+    label: f.label,
+    x: f.x,
+    y: f.y,
+    width: f.width,
+    height: f.height,
+    rotation: f.rotation,
+  }));
 
   return (
     <>
@@ -82,6 +93,7 @@ export default async function BookPage() {
         backgroundUrl={premise.backgroundUrl}
         zones={zones}
         desks={desks}
+        fixtures={fixtures}
         occupancy={occupancy}
         dates={dates}
       />

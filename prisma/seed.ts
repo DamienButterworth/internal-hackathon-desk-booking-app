@@ -105,6 +105,7 @@ async function main() {
   console.log("Resetting database…");
   await prisma.booking.deleteMany();
   await prisma.bookable.deleteMany();
+  await prisma.fixture.deleteMany();
   await prisma.zone.deleteMany();
   await prisma.booker.deleteMany();
   await prisma.premise.deleteMany();
@@ -235,6 +236,64 @@ async function main() {
         textDescription: "Meeting room with screen and video bar.",
         x: 952,
         y: room.y,
+      },
+    });
+  }
+
+  // ---- Layout fixtures: walls, doors, toilets, fire exits, amenities -------
+  // Placed in the empty margins and the central corridor so they frame the
+  // floor without colliding with desks. (type, x, y, width, height, label)
+  const FIXTURES: [
+    string,
+    number,
+    number,
+    number,
+    number,
+    string?,
+    number?,
+  ][] = [
+    // Building perimeter.
+    ["WALL", 20, 26, 1160, 8],
+    ["WALL", 20, 766, 1160, 8],
+    ["WALL", 20, 26, 8, 748],
+    ["WALL", 1172, 26, 8, 748],
+    // Glazing along the south face.
+    ["WINDOW", 250, 764, 200, 12],
+    ["WINDOW", 760, 764, 200, 12],
+    // Corridor wall dividing the desk banks from the breakout area, with a door.
+    ["WALL", 896, 70, 8, 300],
+    ["WALL", 896, 452, 8, 288],
+    ["DOOR", 880, 384, 44, 60],
+    // Main entrance in the south wall.
+    ["ENTRANCE", 70, 742, 64, 52, "Main entrance"],
+    // Restrooms in the north margin.
+    ["TOILET", 540, 6, 56, 56, "Restroom"],
+    ["TOILET", 606, 6, 56, 56, "Restroom"],
+    ["EXTINGUISHER", 470, 8, 40, 52],
+    // Fire exits + safety.
+    ["FIRE_EXIT", 1096, 6, 60, 52, "Fire exit"],
+    ["FIRE_EXIT", 1096, 688, 60, 52, "Fire exit"],
+    // Vertical core: stairs + lift in the breakout strip.
+    ["STAIRS", 1082, 520, 72, 64, "Stairs"],
+    ["ELEVATOR", 1086, 600, 64, 64, "Lift"],
+    // Amenities in the social corner.
+    ["KITCHEN", 1082, 96, 72, 64, "Kitchen"],
+    ["COFFEE", 1090, 174, 56, 56, "Coffee"],
+    // Greenery.
+    ["PLANT", 410, 10, 48, 48],
+    ["PLANT", 1004, 10, 48, 48],
+  ];
+  for (const [type, x, y, width, height, label, rotation] of FIXTURES) {
+    await prisma.fixture.create({
+      data: {
+        premiseId: premise.id,
+        type,
+        label: label ?? "",
+        x,
+        y,
+        width,
+        height,
+        rotation: rotation ?? 0,
       },
     });
   }

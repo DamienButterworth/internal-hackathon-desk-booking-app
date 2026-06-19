@@ -4,7 +4,12 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Users, VolumeX, ArrowUpDown, Monitor, Sparkles, X } from "lucide-react";
 import clsx from "clsx";
-import { FloorPlanView, type DeskVM, type ZoneVM } from "./FloorPlanView";
+import {
+  FloorPlanView,
+  type DeskVM,
+  type ZoneVM,
+  type FixtureVM,
+} from "./FloorPlanView";
 import { BookingDialog } from "./BookingDialog";
 import { ZONE_META, type ZoneType } from "@/lib/types";
 import type { DeskState } from "@/lib/floor";
@@ -44,6 +49,7 @@ export function BookingBoard({
   backgroundUrl,
   zones,
   desks,
+  fixtures = [],
   occupancy,
   dates,
 }: {
@@ -53,6 +59,7 @@ export function BookingBoard({
   backgroundUrl?: string | null;
   zones: ZoneVM[];
   desks: Desk[];
+  fixtures?: FixtureVM[];
   occupancy: Occupancy;
   dates: string[];
 }) {
@@ -223,6 +230,7 @@ export function BookingBoard({
           backgroundUrl={backgroundUrl}
           zones={zones}
           desks={deskVMs}
+          fixtures={fixtures}
           onSelectDesk={(id) => setOpenDeskId(id)}
         />
 
