@@ -36,6 +36,7 @@ export async function createBooking(input: {
   bookerId: string;
   bookableIds: string[];
   date: string;
+  seatIndex?: number;
   startTime?: string;
   endTime?: string;
   bookingTitle?: string;
@@ -43,10 +44,23 @@ export async function createBooking(input: {
   repeat?: string;
 }) {
   if (!input.bookableIds.length) throw new Error("No desk selected");
+  const seatIndex = input.seatIndex ?? 0;
+  // Guard against double-booking the same seat: a bookable is taken when an
+  // active booking already holds this seat (seat 0 for single-seat desks/rooms).
+  const clash = await prisma.booking.findFirst({
+    where: {
+      date: input.date,
+      seatIndex,
+      status: { in: ["RESERVED", "CHECKED_IN"] },
+      bookables: { some: { id: { in: input.bookableIds } } },
+    },
+  });
+  if (clash) throw new Error("That seat is already booked for this date.");
   const booking = await prisma.booking.create({
     data: {
       bookerId: input.bookerId,
       date: input.date,
+      seatIndex,
       startTime: input.startTime ?? "09:00",
       endTime: input.endTime ?? "17:00",
       bookingTitle: input.bookingTitle ?? "",
@@ -83,7 +97,7 @@ export async function cancelBooking(bookingId: string) {
 
 // ---- Admin: layout (bulk positions for desks + zones) ----------------------
 export async function saveLayout(input: {
-  desks: { id: string; x: number; y: number }[];
+  desks: { id: string; x: number; y: number; width?: number; height?: number }[];
   zones: { id: string; points: Point[] }[];
   fixtures?: {
     id: string;
@@ -98,7 +112,12 @@ export async function saveLayout(input: {
     ...input.desks.map((d) =>
       prisma.bookable.update({
         where: { id: d.id },
-        data: { x: d.x, y: d.y },
+        data: {
+          x: d.x,
+          y: d.y,
+          ...(d.width != null ? { width: d.width } : {}),
+          ...(d.height != null ? { height: d.height } : {}),
+        },
       }),
     ),
     ...(input.fixtures ?? []).map((f) =>
@@ -131,6 +150,121 @@ export async function saveLayout(input: {
   revalidateAll();
 }
 
+// Persist a complete layout snapshot in one transaction — used by editor
+// undo/redo, where every field (geometry AND properties) of the existing
+// entities must be restored at once. The set of entities is unchanged (add /
+// delete reset the undo history), so this only updates, never creates/deletes.
+export async function replaceLayoutFull(input: {
+  premiseId: string;
+  desks: {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    name: string;
+    type: string;
+    zoneId: string | null;
+    isAvailable: boolean;
+    seats: number;
+    shape: string;
+    seatSize: number;
+    seatGap: number;
+    seatShape: string;
+    seatSide: string;
+    fontSize: number;
+    endSeats: boolean;
+    tags: string[];
+    textDescription: string;
+  }[];
+  zones: {
+    id: string;
+    name: string;
+    type: string;
+    color: string;
+    points: Point[];
+  }[];
+  fixtures: {
+    id: string;
+    type: string;
+    label: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+  }[];
+  bg: { x: number; y: number; width: number; height: number };
+}) {
+  await prisma.$transaction([
+    ...input.desks.map((d) =>
+      prisma.bookable.update({
+        where: { id: d.id },
+        data: {
+          x: d.x,
+          y: d.y,
+          width: d.width,
+          height: d.height,
+          name: d.name,
+          type: d.type,
+          zoneId: d.zoneId,
+          isAvailable: d.isAvailable,
+          seats: d.seats,
+          shape: d.shape,
+          seatSize: d.seatSize,
+          seatGap: d.seatGap,
+          seatShape: d.seatShape,
+          seatSide: d.seatSide,
+          fontSize: d.fontSize,
+          endSeats: d.endSeats,
+          tags: JSON.stringify(d.tags),
+          textDescription: d.textDescription,
+        },
+      }),
+    ),
+    ...input.zones.map((z) => {
+      const box = bbox(z.points);
+      return prisma.zone.update({
+        where: { id: z.id },
+        data: {
+          name: z.name,
+          type: z.type,
+          color: z.color,
+          points: JSON.stringify(z.points),
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+        },
+      });
+    }),
+    ...input.fixtures.map((f) =>
+      prisma.fixture.update({
+        where: { id: f.id },
+        data: {
+          type: f.type,
+          label: f.label,
+          x: f.x,
+          y: f.y,
+          width: f.width,
+          height: f.height,
+          rotation: f.rotation,
+        },
+      }),
+    ),
+    prisma.premise.update({
+      where: { id: input.premiseId },
+      data: {
+        bgX: input.bg.x,
+        bgY: input.bg.y,
+        bgWidth: input.bg.width,
+        bgHeight: input.bg.height,
+      },
+    }),
+  ]);
+  revalidateAll();
+}
+
 // ---- Admin: desks ----------------------------------------------------------
 export async function updateBookable(
   id: string,
@@ -141,6 +275,16 @@ export async function updateBookable(
     tags?: string[];
     textDescription?: string;
     type?: string;
+    seats?: number;
+    shape?: string;
+    width?: number;
+    height?: number;
+    seatSize?: number;
+    seatGap?: number;
+    seatShape?: string;
+    seatSide?: string;
+    fontSize?: number;
+    endSeats?: boolean;
   },
 ) {
   await prisma.bookable.update({
@@ -153,6 +297,16 @@ export async function updateBookable(
         ? { textDescription: data.textDescription }
         : {}),
       ...("type" in data ? { type: data.type } : {}),
+      ...("seats" in data ? { seats: data.seats } : {}),
+      ...("shape" in data ? { shape: data.shape } : {}),
+      ...("width" in data ? { width: data.width } : {}),
+      ...("height" in data ? { height: data.height } : {}),
+      ...("seatSize" in data ? { seatSize: data.seatSize } : {}),
+      ...("seatGap" in data ? { seatGap: data.seatGap } : {}),
+      ...("seatShape" in data ? { seatShape: data.seatShape } : {}),
+      ...("seatSide" in data ? { seatSide: data.seatSide } : {}),
+      ...("fontSize" in data ? { fontSize: data.fontSize } : {}),
+      ...("endSeats" in data ? { endSeats: data.endSeats } : {}),
       ...(data.tags ? { tags: JSON.stringify(data.tags) } : {}),
     },
   });
@@ -165,6 +319,12 @@ export async function createBookable(input: {
   x: number;
   y: number;
   name: string;
+  seats?: number;
+  shape?: string;
+  width?: number;
+  height?: number;
+  seatSize?: number;
+  endSeats?: boolean;
 }) {
   await prisma.bookable.create({
     data: {
@@ -173,6 +333,12 @@ export async function createBookable(input: {
       name: input.name,
       x: input.x,
       y: input.y,
+      ...(input.seats != null ? { seats: input.seats } : {}),
+      ...(input.shape != null ? { shape: input.shape } : {}),
+      ...(input.width != null ? { width: input.width } : {}),
+      ...(input.height != null ? { height: input.height } : {}),
+      ...(input.seatSize != null ? { seatSize: input.seatSize } : {}),
+      ...(input.endSeats != null ? { endSeats: input.endSeats } : {}),
     },
   });
   revalidateAll();
@@ -189,9 +355,11 @@ export async function createZone(input: {
   name: string;
   type: string;
   color: string;
+  x?: number;
+  y?: number;
 }) {
-  const x = 60;
-  const y = 60;
+  const x = Math.round(input.x ?? 60);
+  const y = Math.round(input.y ?? 60);
   const width = 300;
   const height = 220;
   await prisma.zone.create({
@@ -283,6 +451,16 @@ export async function duplicateBookable(id: string): Promise<string | null> {
       zoneId: src.zoneId,
       name: `${src.name} copy`,
       type: src.type,
+      seats: src.seats,
+      shape: src.shape,
+      width: src.width,
+      height: src.height,
+      seatSize: src.seatSize,
+      seatGap: src.seatGap,
+      seatShape: src.seatShape,
+      seatSide: src.seatSide,
+      fontSize: src.fontSize,
+      endSeats: src.endSeats,
       isAvailable: src.isAvailable,
       tags: src.tags,
       textDescription: src.textDescription,
@@ -360,7 +538,50 @@ export async function updatePremise(
 export async function updatePremiseBackground(
   id: string,
   backgroundUrl: string | null,
+  // Optional placement to set at the same time (e.g. natural size on upload).
+  rect?: { x: number; y: number; width: number; height: number },
 ) {
-  await prisma.premise.update({ where: { id }, data: { backgroundUrl } });
+  await prisma.premise.update({
+    where: { id },
+    data: {
+      backgroundUrl,
+      ...(rect
+        ? {
+            bgX: rect.x,
+            bgY: rect.y,
+            bgWidth: rect.width,
+            bgHeight: rect.height,
+          }
+        : {}),
+    },
+  });
+  revalidateAll();
+}
+
+// Set the global wall appearance (colour and/or opacity) for the premise —
+// applied to every WALL fixture when the plan is rendered.
+export async function updatePremiseWallStyle(
+  id: string,
+  data: { wallColor?: string; wallOpacity?: number },
+) {
+  await prisma.premise.update({
+    where: { id },
+    data: {
+      ...("wallColor" in data ? { wallColor: data.wallColor } : {}),
+      ...("wallOpacity" in data ? { wallOpacity: data.wallOpacity } : {}),
+    },
+  });
+  revalidateAll();
+}
+
+// Reposition/resize the floor-plan background image in world space.
+export async function updatePremiseBackgroundRect(
+  id: string,
+  rect: { x: number; y: number; width: number; height: number },
+) {
+  await prisma.premise.update({
+    where: { id },
+    data: { bgX: rect.x, bgY: rect.y, bgWidth: rect.width, bgHeight: rect.height },
+  });
   revalidateAll();
 }

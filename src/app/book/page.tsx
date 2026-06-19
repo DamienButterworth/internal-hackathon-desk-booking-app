@@ -8,9 +8,11 @@ import { isoDate } from "@/lib/time";
 import { BookingBoard } from "@/components/BookingBoard";
 import { AutoReleasePoller } from "@/components/AutoReleasePoller";
 
-// occupancy[date][bookableId] = who has it (active bookings only)
+// occupancy[date][bookableId][seatIndex] = who has that seat (active bookings).
+// Single-seat desks/rooms use seat 0.
 export type Occupant = { name: string; team: string; mine: boolean };
-export type Occupancy = Record<string, Record<string, Occupant>>;
+export type SeatOccupancy = Record<number, Occupant>;
+export type Occupancy = Record<string, Record<string, SeatOccupancy>>;
 
 export default async function BookPage() {
   const booker = await getCurrentBooker();
@@ -45,7 +47,7 @@ export default async function BookPage() {
   for (const b of bookings) {
     occupancy[b.date] ??= {};
     for (const bk of b.bookables) {
-      occupancy[b.date][bk.id] = {
+      (occupancy[b.date][bk.id] ??= {})[b.seatIndex] = {
         name: b.booker.name,
         team: b.booker.team,
         mine: b.bookerId === booker.id,
@@ -60,6 +62,16 @@ export default async function BookPage() {
     type: b.type,
     x: b.x,
     y: b.y,
+    width: b.width,
+    height: b.height,
+    shape: b.shape,
+    seats: b.seats,
+    seatSize: b.seatSize,
+    seatGap: b.seatGap,
+    seatShape: b.seatShape,
+    seatSide: b.seatSide,
+    fontSize: b.fontSize,
+    endSeats: b.endSeats,
     zoneId: b.zoneId,
     zoneType: b.zoneId ? zoneType.get(b.zoneId) ?? null : null,
     tags: parseTags(b.tags),
@@ -91,6 +103,14 @@ export default async function BookPage() {
         mapWidth={premise.mapWidth}
         mapHeight={premise.mapHeight}
         backgroundUrl={premise.backgroundUrl}
+        bg={{
+          x: premise.bgX,
+          y: premise.bgY,
+          width: premise.bgWidth,
+          height: premise.bgHeight,
+        }}
+        wallColor={premise.wallColor}
+        wallOpacity={premise.wallOpacity}
         zones={zones}
         desks={desks}
         fixtures={fixtures}

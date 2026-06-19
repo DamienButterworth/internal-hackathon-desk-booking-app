@@ -9,6 +9,7 @@
     "lint": "eslint",
     "db:reset": "prisma migrate reset --force",
     "db:seed": "tsx prisma/seed.ts",
+    "db:dump-layout": "tsx prisma/dump-layout.ts",
     "db:studio": "prisma studio"
   },
   "prisma": {

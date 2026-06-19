@@ -22,6 +22,16 @@ type Desk = {
   type: string;
   x: number;
   y: number;
+  width: number;
+  height: number;
+  shape: string;
+  seats: number;
+  seatSize: number;
+  seatGap: number;
+  seatShape: string;
+  seatSide: string;
+  fontSize: number;
+  endSeats: boolean;
   zoneId: string | null;
   zoneType: string | null;
   tags: string[];
@@ -47,6 +57,9 @@ export function BookingBoard({
   mapWidth,
   mapHeight,
   backgroundUrl,
+  bg,
+  wallColor,
+  wallOpacity,
   zones,
   desks,
   fixtures = [],
@@ -57,6 +70,9 @@ export function BookingBoard({
   mapWidth: number;
   mapHeight: number;
   backgroundUrl?: string | null;
+  bg?: { x: number; y: number; width: number; height: number };
+  wallColor?: string;
+  wallOpacity?: number;
   zones: ZoneVM[];
   desks: Desk[];
   fixtures?: FixtureVM[];
@@ -67,9 +83,13 @@ export function BookingBoard({
   const [date, setDate] = useState(dates[0]);
   const [zoneFilter, setZoneFilter] = useState<string>("ALL");
   const [tagFilters, setTagFilters] = useState<string[]>([]);
-  const [openDeskId, setOpenDeskId] = useState<string | null>(null);
+  const [openSeat, setOpenSeat] = useState<{
+    deskId: string;
+    seatIndex: number;
+  } | null>(null);
   const [suggestion, setSuggestion] = useState<{
     deskId: string;
+    seatIndex: number;
     message: string;
   } | null>(null);
 
@@ -79,7 +99,19 @@ export function BookingBoard({
     (zoneFilter === "ALL" || d.zoneType === zoneFilter) &&
     tagFilters.every((t) => d.tags.includes(t));
 
-  const isFree = (d: Desk) => d.isAvailable && !occToday[d.id];
+  // Seat-level occupancy helpers. Single desks/rooms use seat 0.
+  const seatOcc = (d: Desk) => occToday[d.id] ?? {};
+  const isSeatFree = (d: Desk, i: number) => d.isAvailable && !seatOcc(d)[i];
+  const freeSeats = (d: Desk) => {
+    let n = 0;
+    for (let i = 0; i < d.seats; i++) if (isSeatFree(d, i)) n++;
+    return n;
+  };
+  const firstFreeSeat = (d: Desk) => {
+    for (let i = 0; i < d.seats; i++) if (isSeatFree(d, i)) return i;
+    return 0;
+  };
+  const isFree = (d: Desk) => freeSeats(d) > 0;
 
   // ---- Smart "find me a desk" ------------------------------------------------
   function suggest(intent: Intent) {
@@ -90,10 +122,13 @@ export function BookingBoard({
     if (intent === "team") {
       // Rank zones by how many teammates are in today, pick a free desk there.
       const teamByZone = new Map<string, number>();
-      for (const [bid, occ] of Object.entries(occToday)) {
-        if (occ.team !== me.team || occ.mine) continue;
+      for (const [bid, seats] of Object.entries(occToday)) {
         const z = desks.find((d) => d.id === bid)?.zoneId;
-        if (z) teamByZone.set(z, (teamByZone.get(z) ?? 0) + 1);
+        if (!z) continue;
+        for (const occ of Object.values(seats)) {
+          if (occ.team !== me.team || occ.mine) continue;
+          teamByZone.set(z, (teamByZone.get(z) ?? 0) + 1);
+        }
       }
       const ranked = [...teamByZone.entries()].sort((a, b) => b[1] - a[1]);
       for (const [zoneId, count] of ranked) {
@@ -131,10 +166,15 @@ export function BookingBoard({
     }
 
     if (chosen) {
-      setSuggestion({ deskId: chosen.id, message });
+      setSuggestion({
+        deskId: chosen.id,
+        seatIndex: firstFreeSeat(chosen),
+        message,
+      });
     } else {
       setSuggestion({
         deskId: "",
+        seatIndex: 0,
         message: "Nothing free matches that right now — try another day.",
       });
     }
@@ -147,33 +187,59 @@ export function BookingBoard({
   }
 
   // ---- Desk view models ------------------------------------------------------
+  // State of one seat at a desk/table (seat 0 == a single desk or room).
+  const stateOf = (
+    d: Desk,
+    i: number,
+  ): { state: DeskState; subtitle?: string } => {
+    const occ = seatOcc(d)[i];
+    if (!d.isAvailable) return { state: "unavailable" };
+    if (occ?.mine) return { state: "mine", subtitle: "You" };
+    if (occ) return { state: "booked", subtitle: occ.name.split(" ")[0] };
+    if (suggestion?.deskId === d.id && suggestion.seatIndex === i)
+      return { state: "selected" };
+    if (matchesFilter(d)) return { state: "available" };
+    return { state: "dimmed" };
+  };
+
   const deskVMs: DeskVM[] = useMemo(() => {
     return desks.map((d) => {
-      const occ = occToday[d.id];
-      let state: DeskState;
-      let subtitle: string | undefined;
-      if (!d.isAvailable) {
-        state = "unavailable";
-      } else if (occ?.mine) {
-        state = "mine";
-        subtitle = "You";
-      } else if (occ) {
-        state = "booked";
-        subtitle = occ.name.split(" ")[0];
-      } else if (suggestion?.deskId === d.id) {
-        state = "selected";
-      } else if (matchesFilter(d)) {
-        state = "available";
-      } else {
-        state = "dimmed";
+      const base = {
+        id: d.id,
+        name: d.name,
+        type: d.type,
+        x: d.x,
+        y: d.y,
+        width: d.width,
+        height: d.height,
+        shape: d.shape,
+        seats: d.seats,
+        seatSize: d.seatSize,
+        seatGap: d.seatGap,
+        seatShape: d.seatShape,
+        seatSide: d.seatSide,
+        fontSize: d.fontSize,
+        endSeats: d.endSeats,
+      };
+      if (d.seats > 1 && d.type === "DESK") {
+        const seatVMs = Array.from({ length: d.seats }, (_, i) => ({
+          index: i,
+          ...stateOf(d, i),
+        }));
+        return { ...base, state: "available" as DeskState, seatVMs };
       }
-      return { id: d.id, name: d.name, type: d.type, x: d.x, y: d.y, state, subtitle };
+      const { state, subtitle } = stateOf(d, 0);
+      return { ...base, state, subtitle };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desks, occToday, suggestion, zoneFilter, tagFilters]);
 
-  const freeCount = desks.filter((d) => d.type === "DESK" && isFree(d)).length;
-  const deskTotal = desks.filter((d) => d.type === "DESK").length;
+  const freeCount = desks
+    .filter((d) => d.type === "DESK")
+    .reduce((n, d) => n + freeSeats(d), 0);
+  const deskTotal = desks
+    .filter((d) => d.type === "DESK")
+    .reduce((n, d) => n + d.seats, 0);
   const presentTags = useMemo(
     () => [...new Set(desks.flatMap((d) => d.tags))].sort(),
     [desks],
@@ -183,7 +249,9 @@ export function BookingBoard({
     [zones],
   );
 
-  const openDesk = desks.find((d) => d.id === openDeskId);
+  const openDesk = openSeat
+    ? desks.find((d) => d.id === openSeat.deskId)
+    : undefined;
 
   return (
     <div className="mx-auto max-w-[1400px] px-5 py-6">
@@ -191,7 +259,7 @@ export function BookingBoard({
         <div>
           <h1 className="text-xl font-semibold text-ink">Book a desk</h1>
           <p className="text-sm text-muted">
-            {freeCount} of {deskTotal} desks free on {weekdayLabel(date)}{" "}
+            {freeCount} of {deskTotal} seats free on {weekdayLabel(date)}{" "}
             {date.slice(5)}
           </p>
         </div>
@@ -228,10 +296,13 @@ export function BookingBoard({
           mapWidth={mapWidth}
           mapHeight={mapHeight}
           backgroundUrl={backgroundUrl}
+          bg={bg}
+          wallColor={wallColor}
+          wallOpacity={wallOpacity}
           zones={zones}
           desks={deskVMs}
           fixtures={fixtures}
-          onSelectDesk={(id) => setOpenDeskId(id)}
+          onSelectSeat={(deskId, seatIndex) => setOpenSeat({ deskId, seatIndex })}
         />
 
         <aside className="space-y-4">
@@ -264,7 +335,12 @@ export function BookingBoard({
                 {suggestion.deskId && (
                   <button
                     className="btn btn-primary mt-2 w-full"
-                    onClick={() => setOpenDeskId(suggestion.deskId)}
+                    onClick={() =>
+                      setOpenSeat({
+                        deskId: suggestion.deskId,
+                        seatIndex: suggestion.seatIndex,
+                      })
+                    }
                   >
                     Book it
                   </button>
@@ -344,15 +420,16 @@ export function BookingBoard({
         </aside>
       </div>
 
-      {openDesk && (
+      {openDesk && openSeat && (
         <BookingDialog
           desk={openDesk}
           me={me}
           date={date}
-          alreadyMine={!!occToday[openDesk.id]?.mine}
-          onClose={() => setOpenDeskId(null)}
+          seatIndex={openSeat.seatIndex}
+          alreadyMine={!!seatOcc(openDesk)[openSeat.seatIndex]?.mine}
+          onClose={() => setOpenSeat(null)}
           onBooked={() => {
-            setOpenDeskId(null);
+            setOpenSeat(null);
             setSuggestion(null);
             router.refresh();
           }}

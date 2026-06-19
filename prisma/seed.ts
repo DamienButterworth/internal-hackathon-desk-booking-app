@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import layout from "./layout.json";
 
 const prisma = new PrismaClient();
 
@@ -24,83 +25,6 @@ function isoDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-type ZoneSpec = {
-  key: string;
-  name: string;
-  type: string;
-  color: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  cols: number;
-  rows: number;
-  desks: number; // how many of the grid cells to fill
-  tagPool: string[];
-};
-
-const DESK_W = 66;
-const DESK_H = 48;
-
-const ZONES: ZoneSpec[] = [
-  {
-    key: "QUIET",
-    name: "Quiet Zone",
-    type: "QUIET",
-    color: "#0ea5e9",
-    x: 40,
-    y: 70,
-    width: 360,
-    height: 300,
-    cols: 2,
-    rows: 3,
-    desks: 6,
-    tagPool: ["single-monitor", "window", "ergonomic-chair", "accessible"],
-  },
-  {
-    key: "FOCUS",
-    name: "Focus Pods",
-    type: "FOCUS",
-    color: "#14b8a6",
-    x: 40,
-    y: 410,
-    width: 360,
-    height: 330,
-    cols: 2,
-    rows: 3,
-    desks: 6,
-    tagPool: ["dual-monitor", "ergonomic-chair", "dock", "power-dense"],
-  },
-  {
-    key: "COLLAB",
-    name: "Collaboration",
-    type: "COLLAB",
-    color: "#f59e0b",
-    x: 440,
-    y: 70,
-    width: 440,
-    height: 300,
-    cols: 3,
-    rows: 2,
-    desks: 6,
-    tagPool: ["dual-monitor", "dock", "near-meeting-room", "near-kitchen"],
-  },
-  {
-    key: "STANDING",
-    name: "Standing Bank",
-    type: "STANDING",
-    color: "#8b5cf6",
-    x: 440,
-    y: 410,
-    width: 440,
-    height: 330,
-    cols: 3,
-    rows: 2,
-    desks: 6,
-    tagPool: ["standing", "dual-monitor", "dock", "window"],
-  },
-];
-
 async function main() {
   console.log("Resetting database…");
   await prisma.booking.deleteMany();
@@ -115,16 +39,98 @@ async function main() {
     data: { id: "singleton", autoReleaseMinutes: 30 },
   });
 
+  // ---- Floor plan: imported verbatim from the hand-built layout -------------
+  // prisma/layout.json is a dump of the editor's saved plan (premise canvas,
+  // zones, desks/tables and fixtures). Re-export it from the admin editor to
+  // refresh this file. Everything below it (bookers + bookings) is mock data
+  // generated on top of whatever desks the layout provides.
   const premise = await prisma.premise.create({
     data: {
-      name: "Mercator London — Floor 3",
-      address: "Tintagel House, 92 Albert Embankment, London SE1 7TY",
-      mapWidth: 1200,
-      mapHeight: 800,
+      name: layout.premise.name,
+      address: layout.premise.address,
+      mapWidth: layout.premise.mapWidth,
+      mapHeight: layout.premise.mapHeight,
+      backgroundUrl: layout.premise.backgroundUrl,
+      bgX: layout.premise.bgX,
+      bgY: layout.premise.bgY,
+      bgWidth: layout.premise.bgWidth,
+      bgHeight: layout.premise.bgHeight,
+      wallColor: layout.premise.wallColor,
+      wallOpacity: layout.premise.wallOpacity,
     },
   });
 
-  // Bookers — first is the default demo identity, last is the admin.
+  // Zones first, so bookables can be linked back to them by name.
+  const zoneIdByName = new Map<string, string>();
+  for (const z of layout.zones) {
+    const zone = await prisma.zone.create({
+      data: {
+        premiseId: premise.id,
+        name: z.name,
+        type: z.type,
+        color: z.color,
+        x: z.x,
+        y: z.y,
+        width: z.width,
+        height: z.height,
+        points: z.points,
+      },
+    });
+    zoneIdByName.set(z.name, zone.id);
+  }
+
+  // Bookables (desks, multi-seat tables, rooms) with all editor styling fields.
+  const deskIds: string[] = []; // single bookable desks (for historical demand)
+  const tableInfo: { id: string; seats: number }[] = []; // multi-seat tables
+  for (const b of layout.bookables) {
+    const created = await prisma.bookable.create({
+      data: {
+        premiseId: premise.id,
+        zoneId: b.zone ? (zoneIdByName.get(b.zone) ?? null) : null,
+        name: b.name,
+        type: b.type,
+        seats: b.seats,
+        shape: b.shape,
+        width: b.width,
+        height: b.height,
+        seatSize: b.seatSize,
+        seatGap: b.seatGap,
+        seatShape: b.seatShape,
+        seatSide: b.seatSide,
+        fontSize: b.fontSize,
+        endSeats: b.endSeats,
+        isAvailable: b.isAvailable,
+        timesAvailable: b.timesAvailable,
+        tags: b.tags,
+        textDescription: b.textDescription,
+        x: b.x,
+        y: b.y,
+      },
+    });
+    if (b.type === "DESK" && b.seats > 1) {
+      tableInfo.push({ id: created.id, seats: b.seats });
+    } else if (b.type === "DESK") {
+      deskIds.push(created.id);
+    }
+  }
+
+  // Fixtures (walls, doors, windows, amenities) — pure map decoration.
+  for (const f of layout.fixtures) {
+    await prisma.fixture.create({
+      data: {
+        premiseId: premise.id,
+        type: f.type,
+        label: f.label,
+        x: f.x,
+        y: f.y,
+        width: f.width,
+        height: f.height,
+        rotation: f.rotation,
+      },
+    });
+  }
+
+  // ---- Bookers — first is the default demo identity, last is the admin. -----
   const bookerData = [
     { name: "Alex Rivera", team: "Engineering", role: "USER" },
     { name: "Priya Shah", team: "QA", role: "USER" },
@@ -141,162 +147,9 @@ async function main() {
   const bookers = [];
   for (const b of bookerData) {
     const email = `${b.name.toLowerCase().replace(/[^a-z]+/g, ".")}@mercatordigital.com`;
-    bookers.push(
-      await prisma.booker.create({ data: { ...b, email } }),
-    );
+    bookers.push(await prisma.booker.create({ data: { ...b, email } }));
   }
   const users = bookers.filter((b) => b.role === "USER");
-
-  // Zones + desks laid out on a grid inside each zone.
-  const desks: { id: string; zoneKey: string }[] = [];
-  for (const z of ZONES) {
-    const zone = await prisma.zone.create({
-      data: {
-        premiseId: premise.id,
-        name: z.name,
-        type: z.type,
-        color: z.color,
-        x: z.x,
-        y: z.y,
-        width: z.width,
-        height: z.height,
-      },
-    });
-
-    const padX = 28;
-    const padTop = 46; // leave room for the zone label
-    const padBottom = 24;
-    const cellW = (z.width - padX * 2) / z.cols;
-    const cellH = (z.height - padTop - padBottom) / z.rows;
-    let n = 0;
-    for (let r = 0; r < z.rows; r++) {
-      for (let c = 0; c < z.cols; c++) {
-        if (n >= z.desks) break;
-        n++;
-        const x = z.x + padX + c * cellW + (cellW - DESK_W) / 2;
-        const y = z.y + padTop + r * cellH + (cellH - DESK_H) / 2;
-        const tags = z.tagPool.filter(() => chance(0.5));
-        if (tags.length === 0) tags.push(z.tagPool[0]);
-        const desk = await prisma.bookable.create({
-          data: {
-            premiseId: premise.id,
-            zoneId: zone.id,
-            name: `${z.key.slice(0, 1)}-${String(n).padStart(2, "0")}`,
-            type: "DESK",
-            isAvailable: true,
-            tags: JSON.stringify(tags),
-            textDescription: `${z.name} desk with ${tags.join(", ") || "standard setup"}.`,
-            timesAvailable: JSON.stringify([
-              { day: "MON-FRI", from: "08:00", to: "19:00" },
-            ]),
-            x: Math.round(x),
-            y: Math.round(y),
-          },
-        });
-        desks.push({ id: desk.id, zoneKey: z.key });
-      }
-    }
-  }
-
-  // Two meeting rooms in the right-hand strip (SOCIAL / breakout area).
-  // Drawn as an angled polygon to show zones aren't limited to rectangles.
-  const breakoutPoints = [
-    { x: 920, y: 70 },
-    { x: 1160, y: 130 },
-    { x: 1160, y: 680 },
-    { x: 1060, y: 740 },
-    { x: 920, y: 740 },
-  ];
-  const bx = breakoutPoints.map((p) => p.x);
-  const by = breakoutPoints.map((p) => p.y);
-  await prisma.zone.create({
-    data: {
-      premiseId: premise.id,
-      name: "Breakout & Rooms",
-      type: "SOCIAL",
-      color: "#ec4899",
-      x: Math.min(...bx),
-      y: Math.min(...by),
-      width: Math.max(...bx) - Math.min(...bx),
-      height: Math.max(...by) - Math.min(...by),
-      points: JSON.stringify(breakoutPoints),
-    },
-  });
-  const rooms = [
-    { name: "Thames (6)", y: 120 },
-    { name: "Battersea (10)", y: 360 },
-  ];
-  for (const room of rooms) {
-    await prisma.bookable.create({
-      data: {
-        premiseId: premise.id,
-        name: room.name,
-        type: "ROOM",
-        tags: JSON.stringify(["near-kitchen", "dock"]),
-        textDescription: "Meeting room with screen and video bar.",
-        x: 952,
-        y: room.y,
-      },
-    });
-  }
-
-  // ---- Layout fixtures: walls, doors, toilets, fire exits, amenities -------
-  // Placed in the empty margins and the central corridor so they frame the
-  // floor without colliding with desks. (type, x, y, width, height, label)
-  const FIXTURES: [
-    string,
-    number,
-    number,
-    number,
-    number,
-    string?,
-    number?,
-  ][] = [
-    // Building perimeter.
-    ["WALL", 20, 26, 1160, 8],
-    ["WALL", 20, 766, 1160, 8],
-    ["WALL", 20, 26, 8, 748],
-    ["WALL", 1172, 26, 8, 748],
-    // Glazing along the south face.
-    ["WINDOW", 250, 764, 200, 12],
-    ["WINDOW", 760, 764, 200, 12],
-    // Corridor wall dividing the desk banks from the breakout area, with a door.
-    ["WALL", 896, 70, 8, 300],
-    ["WALL", 896, 452, 8, 288],
-    ["DOOR", 880, 384, 44, 60],
-    // Main entrance in the south wall.
-    ["ENTRANCE", 70, 742, 64, 52, "Main entrance"],
-    // Restrooms in the north margin.
-    ["TOILET", 540, 6, 56, 56, "Restroom"],
-    ["TOILET", 606, 6, 56, 56, "Restroom"],
-    ["EXTINGUISHER", 470, 8, 40, 52],
-    // Fire exits + safety.
-    ["FIRE_EXIT", 1096, 6, 60, 52, "Fire exit"],
-    ["FIRE_EXIT", 1096, 688, 60, 52, "Fire exit"],
-    // Vertical core: stairs + lift in the breakout strip.
-    ["STAIRS", 1082, 520, 72, 64, "Stairs"],
-    ["ELEVATOR", 1086, 600, 64, 64, "Lift"],
-    // Amenities in the social corner.
-    ["KITCHEN", 1082, 96, 72, 64, "Kitchen"],
-    ["COFFEE", 1090, 174, 56, 56, "Coffee"],
-    // Greenery.
-    ["PLANT", 410, 10, 48, 48],
-    ["PLANT", 1004, 10, 48, 48],
-  ];
-  for (const [type, x, y, width, height, label, rotation] of FIXTURES) {
-    await prisma.fixture.create({
-      data: {
-        premiseId: premise.id,
-        type,
-        label: label ?? "",
-        x,
-        y,
-        width,
-        height,
-        rotation: rotation ?? 0,
-      },
-    });
-  }
 
   // ---- Historical bookings: ~4 weeks, weekdays only, realistic patterns ----
   // Hybrid-office shape: midweek peaks, Mon/Fri light. No-shows baked in.
@@ -320,20 +173,18 @@ async function main() {
     if (dow === 0 || dow === 6) continue; // skip weekends
     const date = isoDate(day);
     const factor = weekdayFactor[dow] ?? 0.6;
-    const count = Math.round(desks.length * factor * (0.85 + rand() * 0.3));
+    const count = Math.round(deskIds.length * factor * (0.85 + rand() * 0.3));
 
     const used = new Set<string>();
     for (let i = 0; i < count; i++) {
-      const desk = pick(desks);
-      if (used.has(desk.id)) continue;
-      used.add(desk.id);
+      const deskId = pick(deskIds);
+      if (used.has(deskId)) continue;
+      used.add(deskId);
       const user = pick(users);
 
-      // No-show probability: higher Mon/Fri, and quiet desks are booked
-      // speculatively (people grab them "just in case").
+      // No-show probability: higher Mon/Fri (people grab desks "just in case").
       let noShowP = 0.14;
       if (dow === 1 || dow === 5) noShowP += 0.1;
-      if (desk.zoneKey === "QUIET") noShowP += 0.06;
 
       let status = "CHECKED_OUT";
       let checkInAt: Date | null = new Date(day);
@@ -360,8 +211,10 @@ async function main() {
           status,
           checkInAt,
           checkOutAt,
-          bookingTitle: chance(0.25) ? pick(["Focus day", "Team in", "Client prep", "Sprint"]) : "",
-          bookables: { connect: { id: desk.id } },
+          bookingTitle: chance(0.25)
+            ? pick(["Focus day", "Team in", "Client prep", "Sprint"])
+            : "",
+          bookables: { connect: { id: deskId } },
         },
       });
       created++;
@@ -371,7 +224,7 @@ async function main() {
   // ---- Live bookings for TODAY so check-in / auto-release can be demoed ----
   const me = users[0]; // Alex Rivera = default demo identity
   const todayStr = isoDate(today);
-  const liveDesks = desks.slice(0, 6);
+  const liveDesks = deskIds.slice(0, 6);
 
   // Start the demo reservation a few minutes from "now" so there's a real
   // check-in window (it won't be instantly auto-released). Uses the wall clock.
@@ -383,18 +236,20 @@ async function main() {
   const soonTime = hhmm(soon);
 
   // Alex has a reserved desk today (not yet checked in) — drives the demo.
-  await prisma.booking.create({
-    data: {
-      bookerId: me.id,
-      date: todayStr,
-      startTime: soonTime,
-      endTime: "18:00",
-      status: "RESERVED",
-      bookingTitle: "Deep work — projections",
-      bookingGuidance: "Quiet desk near the window, monitor needed.",
-      bookables: { connect: { id: liveDesks[0].id } },
-    },
-  });
+  if (liveDesks[0]) {
+    await prisma.booking.create({
+      data: {
+        bookerId: me.id,
+        date: todayStr,
+        startTime: soonTime,
+        endTime: "18:00",
+        status: "RESERVED",
+        bookingTitle: "Deep work — projections",
+        bookingGuidance: "Quiet desk near the window, monitor needed.",
+        bookables: { connect: { id: liveDesks[0] } },
+      },
+    });
+  }
   // A few other people are in today (mix of statuses) so the map looks alive.
   for (let i = 1; i < liveDesks.length; i++) {
     const status = i % 3 === 0 ? "RESERVED" : "CHECKED_IN";
@@ -406,13 +261,34 @@ async function main() {
         endTime: "17:00",
         status,
         checkInAt: status === "CHECKED_IN" ? new Date() : null,
-        bookables: { connect: { id: liveDesks[i].id } },
+        bookables: { connect: { id: liveDesks[i] } },
       },
     });
   }
 
+  // A handful of seats already taken at the multi-seat tables today, so the
+  // per-seat booking UI is visible (some seats taken, the rest free).
+  for (const table of tableInfo.slice(0, 2)) {
+    const taken = Math.max(1, Math.floor(table.seats / 2));
+    for (let s = 0; s < taken; s++) {
+      const status = s % 3 === 1 ? "RESERVED" : "CHECKED_IN";
+      await prisma.booking.create({
+        data: {
+          bookerId: pick(users).id,
+          date: todayStr,
+          seatIndex: s,
+          startTime: status === "RESERVED" ? nowTime : "09:00",
+          endTime: "17:00",
+          status,
+          checkInAt: status === "CHECKED_IN" ? new Date() : null,
+          bookables: { connect: { id: table.id } },
+        },
+      });
+    }
+  }
+
   console.log(
-    `Seeded: ${bookers.length} bookers, ${desks.length} desks + ${rooms.length} rooms, ${created} historical bookings (${noShows} no-shows).`,
+    `Seeded: ${bookers.length} bookers · ${deskIds.length} desks + ${tableInfo.length} multi-seat tables · ${layout.zones.length} zones · ${layout.fixtures.length} fixtures · ${created} historical bookings (${noShows} no-shows).`,
   );
 }
 

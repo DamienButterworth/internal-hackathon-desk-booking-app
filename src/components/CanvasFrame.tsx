@@ -27,6 +27,7 @@ export function CanvasFrame({
   originX = 0,
   originY = 0,
   zoomable = false,
+  onViewChange,
   children,
 }: {
   mapWidth: number;
@@ -34,6 +35,9 @@ export function CanvasFrame({
   originX?: number;
   originY?: number;
   zoomable?: boolean;
+  // Reports the world-space point at the centre of the visible viewport
+  // whenever the pan/zoom/size changes (so callers can place new content there).
+  onViewChange?: (center: { x: number; y: number }) => void;
   children: (scale: number) => React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -64,6 +68,16 @@ export function CanvasFrame({
   zoomRef.current = zoom;
   const panRef = useRef(pan);
   panRef.current = pan;
+
+  // Report the world-space centre of the viewport so callers can drop new
+  // entities where the user is currently looking (not at the premise origin).
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !onViewChange) return;
+    const cx = originX + (el.clientWidth / 2 - pan.x) / scale;
+    const cy = originY + (el.clientHeight / 2 - pan.y) / scale;
+    onViewChange({ x: cx, y: cy });
+  }, [pan, scale, originX, originY, onViewChange, fit]);
 
   // Re-zoom around a focal point (client coords within the viewport), keeping
   // the map point under that focal point fixed by adjusting the pan offset.

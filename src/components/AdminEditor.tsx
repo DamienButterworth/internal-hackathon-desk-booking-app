@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   Save,
   Trash2,
   Square,
   Armchair,
+  Users,
   Check,
   Info,
   Image as ImageIcon,
@@ -14,12 +15,17 @@ import {
   Shapes,
   RotateCw,
   Copy,
+  Frame,
+  Undo2,
+  Redo2,
+  Grid3x3,
+  Magnet,
 } from "lucide-react";
 import clsx from "clsx";
 import { FloorPlanEditor, type Selection } from "./FloorPlanEditor";
 import type { SelItem } from "./FloorPlanEditor";
 import { FixtureIcon } from "./FixtureIcon";
-import { layoutCanvasSize, type Point } from "@/lib/floor";
+import { layoutCanvasSize, GRID, type Point } from "@/lib/floor";
 import {
   ZONE_TYPES,
   ZONE_META,
@@ -34,6 +40,7 @@ import {
 } from "@/lib/fixtures";
 import {
   saveLayout,
+  replaceLayoutFull,
   updateBookable,
   updateZone,
   createBookable,
@@ -47,7 +54,11 @@ import {
   duplicateZone,
   duplicateFixture,
   updatePremiseBackground,
+  updatePremiseBackgroundRect,
+  updatePremiseWallStyle,
 } from "@/server/actions";
+
+type Rect = { x: number; y: number; width: number; height: number };
 
 type DeskRecord = {
   id: string;
@@ -55,6 +66,16 @@ type DeskRecord = {
   type: string;
   x: number;
   y: number;
+  width: number;
+  height: number;
+  shape: string;
+  seats: number;
+  seatSize: number;
+  seatGap: number;
+  seatShape: string;
+  seatSide: string;
+  fontSize: number;
+  endSeats: boolean;
   zoneId: string | null;
   isAvailable: boolean;
   tags: string[];
@@ -84,6 +105,9 @@ export function AdminEditor({
   mapWidth,
   mapHeight,
   backgroundUrl,
+  bg,
+  wallColor: initialWallColor,
+  wallOpacity: initialWallOpacity,
   initialDesks,
   initialZones,
   initialFixtures,
@@ -93,6 +117,9 @@ export function AdminEditor({
   mapWidth: number;
   mapHeight: number;
   backgroundUrl: string | null;
+  bg: Rect;
+  wallColor: string;
+  wallOpacity: number;
   initialDesks: DeskRecord[];
   initialZones: ZoneRecord[];
   initialFixtures: FixtureRecord[];
@@ -105,21 +132,127 @@ export function AdminEditor({
   const [dirty, setDirty] = useState(false);
   const [pending, startTransition] = useTransition();
   const [background, setBackground] = useState<string | null>(backgroundUrl);
+  const [bgRect, setBgRect] = useState<Rect>(bg);
+  // When on, the background image becomes draggable/resizable and layout
+  // entities are inert, so you can line the scan up with the plan.
+  const [bgEdit, setBgEdit] = useState(false);
+  const [snapToGrid, setSnapToGrid] = useState(true);
+  // When on, dragged elements snap to align with other elements' edges/centres.
+  const [alignToElements, setAlignToElements] = useState(false);
   const [fixtureMenu, setFixtureMenu] = useState(false);
+  // Global wall appearance (persisted immediately, not part of undo history).
+  const [wallColor, setWallColor] = useState(initialWallColor);
+  const [wallOpacity, setWallOpacity] = useState(initialWallOpacity);
+  const hasWalls = fixtures.some((f) => f.type === "WALL");
+
+  // ---- Undo / redo -----------------------------------------------------------
+  // History of the editable layout document. A committed change is snapshotted
+  // (debounced, so a drag records only its final state); undo/redo restores a
+  // snapshot and persists it in one shot via `replaceLayoutFull`. Structural
+  // add/delete resets the history (the entity set must stay constant within it).
+  type Snapshot = {
+    desks: DeskRecord[];
+    zones: ZoneRecord[];
+    fixtures: FixtureRecord[];
+    bg: Rect;
+  };
+  const [hist, setHist] = useState<{ stack: Snapshot[]; index: number }>(() => ({
+    stack: [
+      { desks: initialDesks, zones: initialZones, fixtures: initialFixtures, bg },
+    ],
+    index: 0,
+  }));
+  const suppressHistory = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // The editable canvas grows to fit whatever the entities occupy (with drag
-  // room beyond them), never shrinking below the configured premise size, so
-  // the office is no longer capped at a fixed box.
-  const canvas = useMemo(
-    () =>
-      layoutCanvasSize(desks, zones, fixtures, {
-        pad: 400,
-        minWidth: mapWidth,
-        minHeight: mapHeight,
-      }),
-    [desks, zones, fixtures, mapWidth, mapHeight],
+  // The editable canvas is a FIXED window — it does NOT track edits live (that
+  // made the fit-scale jump around while dragging/rotating). You pan/zoom to
+  // move around while working; the window only re-fits to the content (with
+  // drag room, never below the premise size) when you Save or on structural
+  // add/delete. `refitCanvas` recomputes from the given entities.
+  const fitWindow = (
+    d: DeskRecord[],
+    z: ZoneRecord[],
+    f: FixtureRecord[],
+  ) =>
+    layoutCanvasSize(d, z, f, {
+      pad: 400,
+      minWidth: mapWidth,
+      minHeight: mapHeight,
+    });
+  const [canvas, setCanvas] = useState(() =>
+    fitWindow(initialDesks, initialZones, initialFixtures),
   );
+  const refitCanvas = () => setCanvas(fitWindow(desks, zones, fixtures));
+
+  // Latest world-space centre of the visible viewport (reported by CanvasFrame).
+  // New elements are dropped here so they appear where the user is looking,
+  // falling back to the premise centre before the first pan/zoom event.
+  const viewCenter = useRef({ x: mapWidth / 2, y: mapHeight / 2 });
+  const handleViewChange = useCallback(
+    (c: { x: number; y: number }) => {
+      viewCenter.current = c;
+    },
+    [],
+  );
+  // Top-left for a w×h element centred in the current view.
+  const placeAt = (w: number, h: number) => ({
+    x: Math.round(viewCenter.current.x - w / 2),
+    y: Math.round(viewCenter.current.y - h / 2),
+  });
+
+  // Snapshot the layout after it settles (debounced so a drag records only its
+  // final state, not every frame). Skipped while an undo/redo is applying.
+  useEffect(() => {
+    if (suppressHistory.current) {
+      suppressHistory.current = false;
+      return;
+    }
+    const t = setTimeout(() => {
+      const snap: Snapshot = { desks, zones, fixtures, bg: bgRect };
+      setHist((h) => {
+        const cur = h.stack[h.index];
+        if (cur && JSON.stringify(cur) === JSON.stringify(snap)) return h;
+        const trimmed = h.stack.slice(0, h.index + 1);
+        trimmed.push(snap);
+        const capped = trimmed.slice(Math.max(0, trimmed.length - 50));
+        return { stack: capped, index: capped.length - 1 };
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [desks, zones, fixtures, bgRect]);
+
+  function applySnapshot(s: Snapshot) {
+    suppressHistory.current = true;
+    setDesks(s.desks);
+    setZones(s.zones);
+    setFixtures(s.fixtures);
+    setBgRect(s.bg);
+    setSelection([]);
+    setDirty(false);
+    startTransition(() =>
+      replaceLayoutFull({
+        premiseId,
+        desks: s.desks,
+        zones: s.zones,
+        fixtures: s.fixtures,
+        bg: s.bg,
+      }),
+    );
+  }
+
+  const canUndo = hist.index > 0;
+  const canRedo = hist.index < hist.stack.length - 1;
+  function undo() {
+    if (hist.index <= 0) return;
+    applySnapshot(hist.stack[hist.index - 1]);
+    setHist((h) => ({ ...h, index: h.index - 1 }));
+  }
+  function redo() {
+    if (hist.index >= hist.stack.length - 1) return;
+    applySnapshot(hist.stack[hist.index + 1]);
+    setHist((h) => ({ ...h, index: h.index + 1 }));
+  }
 
   // Read the chosen image, downscale it to the map's coordinate space (it is
   // rendered object-contain anyway), and persist the compact data URL inline on
@@ -153,8 +286,19 @@ export function AdminEditor({
           useJpeg ? "image/jpeg" : "image/png",
           0.85,
         );
+        // Place the new image at its natural (downscaled) size, centred in the
+        // premise box, so it isn't stretched — the user nudges it from there.
+        const rect = {
+          x: Math.round((mapWidth - w) / 2),
+          y: Math.round((mapHeight - h) / 2),
+          width: w,
+          height: h,
+        };
         setBackground(dataUrl);
-        startTransition(() => updatePremiseBackground(premiseId, dataUrl));
+        setBgRect(rect);
+        startTransition(() =>
+          updatePremiseBackground(premiseId, dataUrl, rect),
+        );
       };
       img.src = reader.result as string;
     };
@@ -163,16 +307,33 @@ export function AdminEditor({
 
   function clearBackground() {
     setBackground(null);
+    setBgEdit(false);
     startTransition(() => updatePremiseBackground(premiseId, null));
   }
 
+  // Persist a background move/resize (committed on pointer-up in the editor).
+  function commitBgRect(rect: Rect) {
+    setBgRect(rect);
+    startTransition(() => updatePremiseBackgroundRect(premiseId, rect));
+  }
+
+  // Persist the global wall appearance (state updates live for instant preview;
+  // this is called on a commit event so we don't write on every drag frame).
+  function commitWallStyle(patch: { wallColor?: string; wallOpacity?: number }) {
+    startTransition(() => updatePremiseWallStyle(premiseId, patch));
+  }
+
   // Re-sync from the server after structural changes (add/delete) refresh.
+  // The signature is the *set* of ids (sorted, so it's order-independent): a
+  // plain edit like renaming reorders the server's name-sorted list but must
+  // NOT count as structural, or the re-sync below would clobber the in-progress
+  // edit (this caused renamed/duplicated entities to sometimes revert).
   const sig = useRef("");
   useEffect(() => {
     const next = JSON.stringify({
-      d: initialDesks.map((d) => d.id),
-      z: initialZones.map((z) => z.id),
-      f: initialFixtures.map((f) => f.id),
+      d: initialDesks.map((d) => d.id).sort(),
+      z: initialZones.map((z) => z.id).sort(),
+      f: initialFixtures.map((f) => f.id).sort(),
     });
     if (next !== sig.current) {
       sig.current = next;
@@ -180,8 +341,25 @@ export function AdminEditor({
       setZones(initialZones);
       setFixtures(initialFixtures);
       setDirty(false);
+      // A structural add/delete is a fresh undo baseline (the entity set changed,
+      // so earlier snapshots no longer line up with the DB).
+      suppressHistory.current = true;
+      setHist({
+        stack: [
+          {
+            desks: initialDesks,
+            zones: initialZones,
+            fixtures: initialFixtures,
+            bg: bgRect,
+          },
+        ],
+        index: 0,
+      });
+      // NB: the canvas window is deliberately NOT re-fitted here — adding or
+      // deleting an element must not move/rescale the view. It only re-fits on
+      // an explicit Save (`handleSave`).
     }
-  }, [initialDesks, initialZones, initialFixtures]);
+  }, [initialDesks, initialZones, initialFixtures, bgRect]);
 
   // Detail panels show only for a single selection; 2+ shows the bulk panel.
   const only = selection.length === 1 ? selection[0] : null;
@@ -206,7 +384,13 @@ export function AdminEditor({
 
   async function persistLayout() {
     await saveLayout({
-      desks: desks.map((d) => ({ id: d.id, x: d.x, y: d.y })),
+      desks: desks.map((d) => ({
+        id: d.id,
+        x: d.x,
+        y: d.y,
+        width: d.width,
+        height: d.height,
+      })),
       zones: zones.map((z) => ({ id: z.id, points: z.points })),
       fixtures: fixtures.map((f) => ({
         id: f.id,
@@ -227,8 +411,7 @@ export function AdminEditor({
         premiseId,
         type,
         label: m.defaultLabel ?? "",
-        x: Math.round(mapWidth / 2 - m.w / 2),
-        y: Math.round(mapHeight / 2 - m.h / 2),
+        ...placeAt(m.w, m.h),
         width: m.w,
         height: m.h,
       }),
@@ -239,6 +422,7 @@ export function AdminEditor({
     startTransition(async () => {
       await persistLayout();
       setDirty(false);
+      refitCanvas();
     });
   }
 
@@ -286,8 +470,13 @@ export function AdminEditor({
   // Keyboard shortcuts: Delete/Backspace removes the selection, Ctrl/⌘+D
   // duplicates it. Held in a ref so the listener always runs current logic
   // (with live `selection`/state) without re-subscribing on every render.
-  const shortcutRef = useRef({ del: deleteSelected, dup: duplicateSelected });
-  shortcutRef.current = { del: deleteSelected, dup: duplicateSelected };
+  const shortcutRef = useRef({
+    del: deleteSelected,
+    dup: duplicateSelected,
+    undo,
+    redo,
+  });
+  shortcutRef.current = { del: deleteSelected, dup: duplicateSelected, undo, redo };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -300,10 +489,20 @@ export function AdminEditor({
       ) {
         return; // don't hijack typing in the sidebar fields
       }
-      if (e.key === "Delete" || e.key === "Backspace") {
+      const mod = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === "z") {
+        // ⌘/Ctrl+Z = undo, +Shift (or Ctrl+Y) = redo.
+        e.preventDefault();
+        if (e.shiftKey) shortcutRef.current.redo();
+        else shortcutRef.current.undo();
+      } else if (mod && key === "y") {
+        e.preventDefault();
+        shortcutRef.current.redo();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         shortcutRef.current.del();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") {
+      } else if (mod && key === "d") {
         e.preventDefault();
         shortcutRef.current.dup();
       }
@@ -325,6 +524,41 @@ export function AdminEditor({
             save
           </p>
         </div>
+        <div className="flex items-center gap-1">
+          <button
+            className="btn btn-ghost px-2"
+            disabled={!canUndo || pending}
+            title="Undo (⌘/Ctrl+Z)"
+            onClick={undo}
+          >
+            <Undo2 size={15} />
+          </button>
+          <button
+            className="btn btn-ghost px-2"
+            disabled={!canRedo || pending}
+            title="Redo (⌘/Ctrl+Shift+Z)"
+            onClick={redo}
+          >
+            <Redo2 size={15} />
+          </button>
+          <button
+            className={clsx("btn px-2", snapToGrid ? "btn-primary" : "btn-ghost")}
+            title={`Snap to grid (${GRID}px) — ${snapToGrid ? "on" : "off"}`}
+            onClick={() => setSnapToGrid((s) => !s)}
+          >
+            <Grid3x3 size={15} />
+          </button>
+          <button
+            className={clsx(
+              "btn px-2",
+              alignToElements ? "btn-primary" : "btn-ghost",
+            )}
+            title={`Align to elements — ${alignToElements ? "on" : "off"}`}
+            onClick={() => setAlignToElements((s) => !s)}
+          >
+            <Magnet size={15} />
+          </button>
+        </div>
         <button
           className="btn btn-ghost"
           disabled={pending}
@@ -333,14 +567,33 @@ export function AdminEditor({
               createBookable({
                 premiseId,
                 zoneId: null,
-                x: Math.round(mapWidth / 2 - 33),
-                y: Math.round(mapHeight / 2 - 24),
+                ...placeAt(66, 48),
                 name: `D-${desks.length + 1}`,
               }),
             )
           }
         >
           <Armchair size={15} /> Add desk
+        </button>
+        <button
+          className="btn btn-ghost"
+          disabled={pending}
+          onClick={() =>
+            structural(() =>
+              createBookable({
+                premiseId,
+                zoneId: null,
+                ...placeAt(200, 90),
+                name: `T-${desks.length + 1}`,
+                seats: 6,
+                shape: "RECT",
+                width: 200,
+                height: 90,
+              }),
+            )
+          }
+        >
+          <Users size={15} /> Add table
         </button>
         <input
           ref={fileInputRef}
@@ -356,6 +609,19 @@ export function AdminEditor({
         >
           <ImageIcon size={15} /> {background ? "Replace background" : "Background"}
         </button>
+        {background && (
+          <button
+            className={clsx("btn", bgEdit ? "btn-primary" : "btn-ghost")}
+            disabled={pending}
+            title="Move & resize the background image to line it up with the plan"
+            onClick={() => {
+              setBgEdit((on) => !on);
+              setSelection([]);
+            }}
+          >
+            <Frame size={15} /> {bgEdit ? "Done adjusting" : "Adjust background"}
+          </button>
+        )}
         {background && (
           <button
             className="btn btn-ghost text-danger"
@@ -376,6 +642,7 @@ export function AdminEditor({
                 name: "New zone",
                 type: "FOCUS",
                 color: ZONE_META.FOCUS.color,
+                ...placeAt(300, 220),
               }),
             )
           }
@@ -436,6 +703,14 @@ export function AdminEditor({
           originX={canvas.originX}
           originY={canvas.originY}
           backgroundUrl={background}
+          bg={bgRect}
+          bgEdit={bgEdit}
+          onBgChange={commitBgRect}
+          onViewChange={handleViewChange}
+          snapGrid={snapToGrid ? GRID : 0}
+          align={alignToElements}
+          wallColor={wallColor}
+          wallOpacity={wallOpacity}
           zones={zones}
           desks={desks}
           fixtures={fixtures}
@@ -576,6 +851,173 @@ export function AdminEditor({
                     ))}
                   </select>
                 </div>
+              </div>
+              {selDesk.type !== "ROOM" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="label">Seats</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      className="field mt-1"
+                      value={selDesk.seats}
+                      onChange={(e) => {
+                        const seats = Math.max(
+                          1,
+                          Math.min(20, Math.round(Number(e.target.value) || 1)),
+                        );
+                        patchDesk(selDesk.id, { seats });
+                        updateBookable(selDesk.id, { seats });
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Shape</label>
+                    <select
+                      className="field mt-1"
+                      value={selDesk.shape}
+                      disabled={selDesk.seats <= 1}
+                      onChange={(e) => {
+                        const shape = e.target.value;
+                        patchDesk(selDesk.id, { shape });
+                        updateBookable(selDesk.id, { shape });
+                      }}
+                    >
+                      <option value="RECT">Rectangle</option>
+                      <option value="ROUND">Round</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              {selDesk.type !== "ROOM" && (
+                <div>
+                  <label className="label">
+                    Seat size{" "}
+                    <span className="text-muted">({selDesk.seatSize}px)</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={10}
+                    max={80}
+                    step={1}
+                    className="mt-1 w-full accent-brand"
+                    value={selDesk.seatSize}
+                    onChange={(e) => {
+                      const seatSize = Math.max(
+                        10,
+                        Math.min(80, Math.round(Number(e.target.value) || 18)),
+                      );
+                      patchDesk(selDesk.id, { seatSize });
+                      updateBookable(selDesk.id, { seatSize });
+                    }}
+                  />
+                </div>
+              )}
+              {selDesk.type !== "ROOM" && (
+                <div>
+                  <label className="label">
+                    Seat spacing{" "}
+                    <span className="text-muted">({selDesk.seatGap}px)</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={40}
+                    step={1}
+                    className="mt-1 w-full accent-brand"
+                    value={selDesk.seatGap}
+                    onChange={(e) => {
+                      const seatGap = Math.max(
+                        0,
+                        Math.min(40, Math.round(Number(e.target.value) || 0)),
+                      );
+                      patchDesk(selDesk.id, { seatGap });
+                      updateBookable(selDesk.id, { seatGap });
+                    }}
+                  />
+                </div>
+              )}
+              {selDesk.type !== "ROOM" && (
+                <div>
+                  <label className="label">Chair shape</label>
+                  <select
+                    className="field mt-1"
+                    value={selDesk.seatShape}
+                    onChange={(e) => {
+                      const seatShape = e.target.value;
+                      patchDesk(selDesk.id, { seatShape });
+                      updateBookable(selDesk.id, { seatShape });
+                    }}
+                  >
+                    <option value="ROUND">Sphere</option>
+                    <option value="RECT">Rectangle</option>
+                  </select>
+                </div>
+              )}
+              {selDesk.type !== "ROOM" && selDesk.seats <= 1 && (
+                <div>
+                  <label className="label">Chair side</label>
+                  <select
+                    className="field mt-1"
+                    value={selDesk.seatSide}
+                    onChange={(e) => {
+                      const seatSide = e.target.value;
+                      patchDesk(selDesk.id, { seatSide });
+                      updateBookable(selDesk.id, { seatSide });
+                    }}
+                  >
+                    <option value="BOTTOM">Bottom</option>
+                    <option value="TOP">Top</option>
+                    <option value="LEFT">Left</option>
+                    <option value="RIGHT">Right</option>
+                  </select>
+                </div>
+              )}
+              {selDesk.type !== "ROOM" &&
+                selDesk.seats > 1 &&
+                selDesk.shape === "RECT" && (
+                  <label className="flex items-center gap-2 text-sm text-ink-soft">
+                    <input
+                      type="checkbox"
+                      checked={selDesk.endSeats ?? false}
+                      onChange={(e) => {
+                        const endSeats = e.target.checked;
+                        patchDesk(selDesk.id, { endSeats });
+                        updateBookable(selDesk.id, { endSeats });
+                      }}
+                    />
+                    Seat the ends (boardroom)
+                  </label>
+                )}
+              {selDesk.type !== "ROOM" && (
+                <p className="text-xs text-muted">
+                  {selDesk.seats > 1
+                    ? "Drag the table's edges on the plan to resize. Each seat is booked individually."
+                    : "Set seats above 1 to make this a multi-person table. Drag edges to resize."}
+                </p>
+              )}
+              <div>
+                <label className="label">
+                  Label font size{" "}
+                  <span className="text-muted">({selDesk.fontSize}px)</span>
+                </label>
+                <input
+                  type="range"
+                  min={7}
+                  max={72}
+                  step={1}
+                  className="mt-1 w-full accent-brand"
+                  value={selDesk.fontSize}
+                  onChange={(e) => {
+                    const fontSize = Math.max(
+                      7,
+                      Math.min(72, Math.round(Number(e.target.value) || 11)),
+                    );
+                    patchDesk(selDesk.id, { fontSize });
+                    updateBookable(selDesk.id, { fontSize });
+                  }}
+                />
               </div>
               <label className="flex items-center gap-2 text-sm text-ink-soft">
                 <input
@@ -812,6 +1254,66 @@ export function AdminEditor({
               </p>
             </div>
           )}
+
+          {/* Global wall appearance — applies to every wall in the plan. */}
+          <div className="mt-4 border-t border-line pt-4">
+            <h3 className="font-semibold text-ink">Wall style</h3>
+            <p className="mt-1 text-xs text-muted">
+              Applies to every wall in the plan.
+              {!hasWalls && " Add a wall element to see the effect."}
+            </p>
+            <div className="mt-3 space-y-3">
+              <div>
+                <label className="label">Colour</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="color"
+                    className="h-9 w-12 cursor-pointer rounded border border-line bg-white p-1"
+                    value={wallColor}
+                    onChange={(e) => setWallColor(e.target.value)}
+                    onBlur={(e) =>
+                      commitWallStyle({ wallColor: e.target.value })
+                    }
+                  />
+                  <input
+                    className="field flex-1"
+                    value={wallColor}
+                    onChange={(e) => setWallColor(e.target.value)}
+                    onBlur={(e) =>
+                      commitWallStyle({ wallColor: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="label">
+                  Opacity{" "}
+                  <span className="text-muted">
+                    ({Math.round(wallOpacity * 100)}%)
+                  </span>
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  className="mt-1 w-full accent-brand"
+                  value={Math.round(wallOpacity * 100)}
+                  onChange={(e) => setWallOpacity(Number(e.target.value) / 100)}
+                  onPointerUp={(e) =>
+                    commitWallStyle({
+                      wallOpacity: Number(e.currentTarget.value) / 100,
+                    })
+                  }
+                  onKeyUp={(e) =>
+                    commitWallStyle({
+                      wallOpacity: Number(e.currentTarget.value) / 100,
+                    })
+                  }
+                />
+              </div>
+            </div>
+          </div>
         </aside>
       </div>
     </div>

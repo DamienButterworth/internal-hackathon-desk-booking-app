@@ -9,6 +9,7 @@ export type DeskForDialog = {
   id: string;
   name: string;
   type: string;
+  seats: number;
   zoneType: string | null;
   tags: string[];
   description: string;
@@ -18,6 +19,7 @@ export function BookingDialog({
   desk,
   me,
   date,
+  seatIndex,
   alreadyMine,
   onClose,
   onBooked,
@@ -25,6 +27,7 @@ export function BookingDialog({
   desk: DeskForDialog;
   me: { id: string; name: string };
   date: string;
+  seatIndex: number;
   alreadyMine: boolean;
   onClose: () => void;
   onBooked: () => void;
@@ -46,6 +49,7 @@ export function BookingDialog({
         bookerId: me.id,
         bookableIds: [desk.id],
         date,
+        seatIndex,
         startTime,
         endTime,
         bookingTitle: title,
@@ -68,7 +72,9 @@ export function BookingDialog({
         <div className="mb-3 flex items-start justify-between">
           <div>
             <h3 className="text-lg font-semibold text-ink">
-              {desk.type === "ROOM" ? "Room" : "Desk"} {desk.name}
+              {desk.seats > 1
+                ? `Seat ${seatIndex + 1} · ${desk.name}`
+                : `${desk.type === "ROOM" ? "Room" : "Desk"} ${desk.name}`}
             </h3>
             <p className="flex items-center gap-1.5 text-sm text-muted">
               <MapPin size={13} className="text-brand" />

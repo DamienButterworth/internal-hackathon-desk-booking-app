@@ -19,6 +19,15 @@ model Premise {
   mapWidth      Int        @default(1200)
   mapHeight     Int        @default(800)
   backgroundUrl String?
+  // World-space placement of the background image so a floor-plan scan can be
+  // scaled/positioned to line up with the drawn layout (editable in the admin).
+  bgX           Float      @default(0)
+  bgY           Float      @default(0)
+  bgWidth       Float      @default(1200)
+  bgHeight      Float      @default(800)
+  // Global wall appearance, applied to every WALL fixture in the plan.
+  wallColor     String     @default("#334155")
+  wallOpacity   Float      @default(1)
   zones         Zone[]
   bookables     Bookable[]
   fixtures      Fixture[]
@@ -66,6 +75,18 @@ model Bookable {
   zoneId          String?
   name            String
   type            String    @default("DESK") // DESK | ROOM
+  // Multi-person desks/tables: a Bookable with seats > 1 exposes that many
+  // individually-bookable seats laid out by `shape` around its width/height box.
+  seats           Int       @default(1)
+  shape           String    @default("RECT") // RECT | ROUND (seat layout)
+  width           Float     @default(66)
+  height          Float     @default(48)
+  seatSize        Float     @default(18) // seat-marker diameter (adjustable)
+  seatGap         Float     @default(5) // gap between a seat marker and the table edge
+  seatShape       String    @default("ROUND") // chair marker shape: ROUND | RECT
+  seatSide        String    @default("BOTTOM") // single-desk chair edge: TOP | RIGHT | BOTTOM | LEFT
+  fontSize        Float     @default(11) // desk/table name label size (px)
+  endSeats        Boolean   @default(false) // RECT only: seat each short end too
   isAvailable     Boolean   @default(true)
   // JSON-encoded availability windows, e.g. [{"day":"MON","from":"09:00","to":"18:00"}]
   timesAvailable  String    @default("[]")
@@ -92,6 +113,8 @@ model Booking {
   bookerId        String
   bookables       Bookable[] @relation("BookingBookables")
   date            String     // ISO date "2026-06-18" (the day booked)
+  // Which seat of the bookable this booking holds (0 for single-seat desks/rooms).
+  seatIndex       Int        @default(0)
   startTime       String     @default("09:00")
   endTime         String     @default("17:00")
   repeat          String     @default("NONE") // NONE | DAILY | WEEKLY

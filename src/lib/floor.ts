@@ -5,6 +5,129 @@ import { ZONE_META } from "./types";
 export const DESK_W = 66;
 export const DESK_H = 48;
 
+// Editor snap-to-grid spacing (world units) used for drag/resize alignment.
+export const GRID = 20;
+
+// Room render size (the body box of a ROOM bookable).
+export const ROOM_W = DESK_W + 60;
+export const ROOM_H = DESK_H + 70;
+
+// Default seat marker diameter + gap from the table edge. The size is now
+// per-bookable (`seatSize`), defaulting to SEAT.
+export const SEAT = 18;
+export const SEAT_GAP = 5;
+
+// Default desk/table name label size (px); per-bookable via `fontSize`.
+export const FONT = 11;
+
+export type TableShape = "RECT" | "ROUND";
+
+type DeskGeom = {
+  type: string;
+  seats?: number;
+  shape?: string;
+  width?: number;
+  height?: number;
+  seatSize?: number;
+  seatGap?: number;
+  seatSide?: string;
+  endSeats?: boolean;
+};
+
+// The body box (table surface) of a bookable, ignoring any seats around it.
+export function deskBox(d: DeskGeom): { w: number; h: number } {
+  if (d.type === "ROOM") return { w: ROOM_W, h: ROOM_H };
+  return { w: d.width || DESK_W, h: d.height || DESK_H };
+}
+
+// Seat-centre positions (in box-local coords, origin at the table top-left).
+// A single seat sits at the front (bottom) edge — so even a plain desk shows a
+// chair. Multi-seat tables ring the body (ROUND) or split across the long
+// top/bottom edges (RECT). `seatSize` controls the marker diameter and
+// `seatGap` the spacing between the marker and the table edge. `endSeats`
+// (RECT only) reserves one seat for each short (left/right) end — boardroom
+// style — and distributes the remainder along the top/bottom edges.
+export function seatSlots(
+  shape: string,
+  w: number,
+  h: number,
+  seats: number,
+  seatSize: number = SEAT,
+  endSeats: boolean = false,
+  seatGap: number = SEAT_GAP,
+  // Which edge a single desk's chair sits on (multi-seat layouts ignore this).
+  seatSide: string = "BOTTOM",
+): Point[] {
+  if (seats < 1) return [];
+  const off = seatSize / 2 + seatGap;
+  if (seats === 1) {
+    switch (seatSide) {
+      case "TOP":
+        return [{ x: w / 2, y: -off }];
+      case "LEFT":
+        return [{ x: -off, y: h / 2 }];
+      case "RIGHT":
+        return [{ x: w + off, y: h / 2 }];
+      default: // BOTTOM (front)
+        return [{ x: w / 2, y: h + off }];
+    }
+  }
+  if (shape === "ROUND") {
+    const cx = w / 2;
+    const cy = h / 2;
+    const rx = w / 2 + off;
+    const ry = h / 2 + off;
+    const slots: Point[] = [];
+    for (let i = 0; i < seats; i++) {
+      const a = (i / seats) * Math.PI * 2 - Math.PI / 2; // start at top, clockwise
+      slots.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+    }
+    return slots;
+  }
+  // RECT: seats along the long top/bottom edges. With `endSeats`, reserve one
+  // seat for each short end and split the rest between top and bottom.
+  const slots: Point[] = [];
+  const placeRow = (n: number, y: number) => {
+    for (let i = 0; i < n; i++) slots.push({ x: (w * (i + 1)) / (n + 1), y });
+  };
+  if (endSeats) {
+    const nEnds = Math.min(2, seats);
+    const rest = seats - nEnds;
+    const nTop = Math.ceil(rest / 2);
+    placeRow(nTop, -off);
+    placeRow(rest - nTop, h + off);
+    slots.push({ x: -off, y: h / 2 }); // left end
+    if (nEnds === 2) slots.push({ x: w + off, y: h / 2 }); // right end
+    return slots;
+  }
+  const nTop = Math.ceil(seats / 2);
+  placeRow(nTop, -off);
+  placeRow(seats - nTop, h + off);
+  return slots;
+}
+
+// World-space bounding box of a bookable including any seats around it.
+export function deskBounds(d: DeskGeom & { x: number; y: number }) {
+  const { w, h } = deskBox(d);
+  if (d.type === "ROOM") {
+    return { minX: d.x, minY: d.y, maxX: d.x + w, maxY: d.y + h };
+  }
+  const seats = d.seats ?? 1;
+  const seatSize = d.seatSize || SEAT;
+  const seatGap = d.seatGap ?? SEAT_GAP;
+  let minX = 0;
+  let minY = 0;
+  let maxX = w;
+  let maxY = h;
+  for (const s of seatSlots(d.shape ?? "RECT", w, h, seats, seatSize, d.endSeats, seatGap, d.seatSide)) {
+    minX = Math.min(minX, s.x - seatSize / 2);
+    minY = Math.min(minY, s.y - seatSize / 2);
+    maxX = Math.max(maxX, s.x + seatSize / 2);
+    maxY = Math.max(maxY, s.y + seatSize / 2);
+  }
+  return { minX: d.x + minX, minY: d.y + minY, maxX: d.x + maxX, maxY: d.y + maxY };
+}
+
 export type DeskState =
   | "available"
   | "booked" // taken by someone else (reserved / checked-in) today
@@ -117,7 +240,19 @@ export function pointsToAttr(points: Point[]): string {
 // being capped at a fixed premise box. Returns the world-space origin (top-left,
 // may be negative) plus the span. `pad` leaves slack on every side (drag-room in
 // the editor); `minWidth/minHeight` (the premise size) act as a floor.
-type DeskLike = { x: number; y: number; type: string };
+type DeskLike = {
+  x: number;
+  y: number;
+  type: string;
+  seats?: number;
+  shape?: string;
+  width?: number;
+  height?: number;
+  seatSize?: number;
+  seatGap?: number;
+  seatSide?: string;
+  endSeats?: boolean;
+};
 type ZoneLike = { points: Point[] };
 type FixtureLike = {
   x: number;
@@ -131,14 +266,30 @@ export function layoutCanvasSize(
   desks: DeskLike[],
   zones: ZoneLike[],
   fixtures: FixtureLike[],
-  opts: { pad?: number; minWidth?: number; minHeight?: number } = {},
+  opts: {
+    pad?: number;
+    minWidth?: number;
+    minHeight?: number;
+    // When false, the window hugs the content tightly instead of always
+    // including the premise origin (used by the read-only view to maximise).
+    seedOrigin?: boolean;
+    // Extra world-space rects to include in the bounds (e.g. the background).
+    extra?: { x: number; y: number; width: number; height: number }[];
+  } = {},
 ): { originX: number; originY: number; width: number; height: number } {
-  const { pad = 0, minWidth = 0, minHeight = 0 } = opts;
-  // Seed at 0,0 so the premise origin is always included in the window.
-  let minX = 0;
-  let minY = 0;
-  let maxX = 0;
-  let maxY = 0;
+  const {
+    pad = 0,
+    minWidth = 0,
+    minHeight = 0,
+    seedOrigin = true,
+    extra = [],
+  } = opts;
+  // Seed at 0,0 so the premise origin is always included in the window (unless
+  // seedOrigin is off, then start unbounded and hug the actual content).
+  let minX = seedOrigin ? 0 : Infinity;
+  let minY = seedOrigin ? 0 : Infinity;
+  let maxX = seedOrigin ? 0 : -Infinity;
+  let maxY = seedOrigin ? 0 : -Infinity;
   const acc = (x: number, y: number) => {
     if (x < minX) minX = x;
     if (y < minY) minY = y;
@@ -146,9 +297,9 @@ export function layoutCanvasSize(
     if (y > maxY) maxY = y;
   };
   for (const d of desks) {
-    const isRoom = d.type === "ROOM";
-    acc(d.x, d.y);
-    acc(d.x + (isRoom ? DESK_W + 60 : DESK_W), d.y + (isRoom ? DESK_H + 70 : DESK_H));
+    const b = deskBounds(d);
+    acc(b.minX, b.minY);
+    acc(b.maxX, b.maxY);
   }
   for (const z of zones) {
     for (const p of z.points) acc(p.x, p.y);
@@ -166,6 +317,17 @@ export function layoutCanvasSize(
     const cy = f.y + f.height / 2;
     acc(cx - hx, cy - hy);
     acc(cx + hx, cy + hy);
+  }
+  for (const r of extra) {
+    acc(r.x, r.y);
+    acc(r.x + r.width, r.y + r.height);
+  }
+  // Nothing to bound (empty plan, no seed) → fall back to the premise box.
+  if (!Number.isFinite(minX)) {
+    minX = 0;
+    minY = 0;
+    maxX = minWidth;
+    maxY = minHeight;
   }
   minX -= pad;
   minY -= pad;
@@ -208,4 +370,93 @@ export function labelAnchor(points: Point[]): Point {
     (a, p) => (p.y < a.y || (p.y === a.y && p.x < a.x) ? p : a),
     points[0],
   );
+}
+
+// ---- Walls -----------------------------------------------------------------
+// A thin fixture (wall/window) is a rotated box. These helpers work off its
+// centreline so snapping, junction detection and rendering all agree.
+type WallLike = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+};
+
+// The two centreline endpoints in world space, accounting for the CSS rotation
+// applied about the box centre.
+export function wallEnds(f: WallLike): [Point, Point] {
+  const cx = f.x + f.width / 2;
+  const cy = f.y + f.height / 2;
+  const horizontal = f.width >= f.height;
+  const half = (horizontal ? f.width : f.height) / 2;
+  const r = ((f.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const local: [Point, Point] = horizontal
+    ? [{ x: -half, y: 0 }, { x: half, y: 0 }]
+    : [{ x: 0, y: -half }, { x: 0, y: half }];
+  return local.map((l) => ({
+    x: cx + l.x * cos - l.y * sin,
+    y: cy + l.x * sin + l.y * cos,
+  })) as [Point, Point];
+}
+
+// Wall thickness = its short side.
+export function wallThickness(f: WallLike): number {
+  return Math.min(f.width, f.height);
+}
+
+// Closest point to P on segment AB, with the distance to it. Used to snap a
+// wall end onto ANY part of another wall (its end or anywhere along its run).
+export function closestPointOnSegment(
+  p: Point,
+  a: Point,
+  b: Point,
+): { point: Point; dist: number } {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const len2 = abx * abx + aby * aby;
+  let t = len2 ? ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const point = { x: a.x + t * abx, y: a.y + t * aby };
+  return { point, dist: Math.hypot(p.x - point.x, p.y - point.y) };
+}
+
+// Junction discs that make connected walls read as one fluid run. Wherever a
+// wall end meets another wall — its end (an elbow) OR anywhere along it (a
+// T-join) — we drop a disc the width of the wall to fill the gap the square
+// rectangles leave at the corner. Coincident nodes are merged so a translucent
+// wall colour doesn't double up. Returns world-space centres + diameters.
+export function wallJunctions(
+  walls: WallLike[],
+  tol = 6,
+): { x: number; y: number; size: number }[] {
+  const segs = walls.map((w) => ({
+    ends: wallEnds(w),
+    th: wallThickness(w),
+  }));
+  const nodes: { x: number; y: number; size: number }[] = [];
+  for (let i = 0; i < segs.length; i++) {
+    for (const end of segs[i].ends) {
+      for (let j = 0; j < segs.length; j++) {
+        if (i === j) continue;
+        const { dist } = closestPointOnSegment(
+          end,
+          segs[j].ends[0],
+          segs[j].ends[1],
+        );
+        if (dist <= tol) {
+          const size = Math.max(segs[i].th, segs[j].th);
+          // Merge with an existing node at (nearly) the same spot, keeping the
+          // larger disc, so overlapping translucent discs don't darken.
+          const near = nodes.find((n) => Math.hypot(n.x - end.x, n.y - end.y) <= tol);
+          if (near) near.size = Math.max(near.size, size);
+          else nodes.push({ x: end.x, y: end.y, size });
+          break;
+        }
+      }
+    }
+  }
+  return nodes;
 }

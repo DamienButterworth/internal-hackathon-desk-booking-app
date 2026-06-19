@@ -7,11 +7,16 @@ import clsx from "clsx";
 import { CanvasFrame } from "./CanvasFrame";
 import { FixtureShape } from "./FixtureShape";
 import {
-  DESK_W,
-  DESK_H,
+  SEAT,
+  SEAT_GAP,
+  FONT,
+  deskBox,
+  seatSlots,
   zoneVisual,
   pointsToAttr,
   labelAnchor,
+  closestPointOnSegment,
+  wallJunctions,
   type Point,
 } from "@/lib/floor";
 
@@ -21,8 +26,25 @@ export type EditDesk = {
   type: string;
   x: number;
   y: number;
+  width: number;
+  height: number;
+  shape: string;
+  seats: number;
+  seatSize: number;
+  seatGap: number;
+  seatShape: string;
+  seatSide: string;
+  fontSize: number;
+  endSeats: boolean;
   zoneId: string | null;
   isAvailable: boolean;
+};
+
+export type DeskGeom = {
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
 };
 export type EditZone = {
   id: string;
@@ -80,6 +102,14 @@ export function FloorPlanEditor({
   originX = 0,
   originY = 0,
   backgroundUrl,
+  bg,
+  bgEdit = false,
+  onBgChange,
+  onViewChange,
+  snapGrid = 0,
+  align = false,
+  wallColor,
+  wallOpacity,
   zones,
   desks,
   fixtures,
@@ -95,13 +125,27 @@ export function FloorPlanEditor({
   originX?: number;
   originY?: number;
   backgroundUrl?: string | null;
+  // World-space placement of the background image.
+  bg: { x: number; y: number; width: number; height: number };
+  // When true the background is draggable/resizable and entities are inert.
+  bgEdit?: boolean;
+  onBgChange?: (rect: { x: number; y: number; width: number; height: number }) => void;
+  onViewChange?: (center: { x: number; y: number }) => void;
+  // Snap-to-grid spacing in world units; 0 disables snapping.
+  snapGrid?: number;
+  // When on, a dragged element snaps so its edges/centres line up with other
+  // elements, with guide lines shown while dragging.
+  align?: boolean;
+  // Global wall appearance.
+  wallColor?: string;
+  wallOpacity?: number;
   zones: EditZone[];
   desks: EditDesk[];
   fixtures: EditFixture[];
   selection: Selection;
   onSelectionChange: (s: Selection) => void;
   onZoneChange: (id: string, points: Point[]) => void;
-  onDeskChange: (id: string, pos: { x: number; y: number }) => void;
+  onDeskChange: (id: string, geom: DeskGeom) => void;
   onFixtureChange: (id: string, geom: FixtureGeom) => void;
   onFixtureRotate: (id: string, rotation: number, commit: boolean) => void;
 }) {
@@ -139,6 +183,9 @@ export function FloorPlanEditor({
   const scaleRef = useRef(1);
   const [drag, setDrag] = useState<Drag | null>(null);
 
+  // Alignment guide lines (world coords) shown while dragging with `align` on.
+  const [guides, setGuides] = useState<{ x: number | null; y: number | null } | null>(null);
+
   // Group move (multi-selection) + rubber-band marquee state.
   const groupRef = useRef<GroupOrigin | null>(null);
   const [marquee, setMarquee] = useState<Marquee | null>(null);
@@ -154,10 +201,29 @@ export function FloorPlanEditor({
     cy: number;
   } | null>(null);
 
+  // Tracks an in-progress drag of a thin fixture's length (endpoint) handle.
+  // `pinned` is the opposite end, held fixed in map coords while we extend.
+  const [lengthDrag, setLengthDrag] = useState<{
+    id: string;
+    which: 0 | 1;
+    pinned: Point;
+    horizontal: boolean;
+    thickness: number;
+  } | null>(null);
+  // The endpoint currently being snapped to (highlighted while extending).
+  const [snapAt, setSnapAt] = useState<Point | null>(null);
+
+
   // No restriction: entities may be moved freely in any direction (the canvas
   // window grows to follow them), so coordinates are passed through unclamped.
   const clampX = (x: number) => x;
   const clampY = (y: number) => y;
+
+  // Snap a world coordinate to the nearest grid line when snapping is on.
+  const snap = (v: number) =>
+    snapGrid > 0 ? Math.round(v / snapGrid) * snapGrid : v;
+  const grid: [number, number] | undefined =
+    snapGrid > 0 ? [snapGrid, snapGrid] : undefined;
 
   // Convert a screen pointer position into map coordinates. The SVG layer is
   // pinned to map (0,0) and visually scaled, so its bounding rect gives the
@@ -170,6 +236,57 @@ export function FloorPlanEditor({
       x: (e.clientX - rect.left) / scale,
       y: (e.clientY - rect.top) / scale,
     };
+  }
+
+  // ---- Align to other elements ---------------------------------------------
+  // Snap a dragged element's box so one of its edges/centres lines up with
+  // another element's (within a zoom-independent tolerance). Returns the
+  // adjusted top-left plus the guide lines (world coords) that matched.
+  function alignSnap(
+    box: { x: number; y: number; w: number; h: number },
+    exclude: SelItem,
+  ): { x: number; y: number; gx: number | null; gy: number | null } {
+    const tol = 6 / (scaleRef.current || 1);
+    const vx: number[] = []; // candidate vertical guide x's
+    const hy: number[] = []; // candidate horizontal guide y's
+    for (const d of desks) {
+      if (exclude.kind === "desk" && d.id === exclude.id) continue;
+      const { w, h } = deskBox(d);
+      vx.push(d.x, d.x + w / 2, d.x + w);
+      hy.push(d.y, d.y + h / 2, d.y + h);
+    }
+    for (const f of fixtures) {
+      if (exclude.kind === "fixture" && f.id === exclude.id) continue;
+      vx.push(f.x, f.x + f.width / 2, f.x + f.width);
+      hy.push(f.y, f.y + f.height / 2, f.y + f.height);
+    }
+    const ex = [box.x, box.x + box.w / 2, box.x + box.w];
+    const ey = [box.y, box.y + box.h / 2, box.y + box.h];
+    let bestX = tol;
+    let dx = 0;
+    let gx: number | null = null;
+    for (const e of ex)
+      for (const g of vx) {
+        const d = Math.abs(g - e);
+        if (d < bestX) {
+          bestX = d;
+          dx = g - e;
+          gx = g;
+        }
+      }
+    let bestY = tol;
+    let dy = 0;
+    let gy: number | null = null;
+    for (const e of ey)
+      for (const g of hy) {
+        const d = Math.abs(g - e);
+        if (d < bestY) {
+          bestY = d;
+          dy = g - e;
+          gy = g;
+        }
+      }
+    return { x: Math.round(box.x + dx), y: Math.round(box.y + dy), gx, gy };
   }
 
   // ---- Group move (multi-selection) ----------------------------------------
@@ -276,8 +393,7 @@ export function FloorPlanEditor({
     ): boolean => bx0 <= maxX && bx1 >= minX && by0 <= maxY && by1 >= minY;
     const found: SelItem[] = [];
     for (const d of desks) {
-      const w = d.type === "ROOM" ? DESK_W + 60 : DESK_W;
-      const h = d.type === "ROOM" ? DESK_H + 70 : DESK_H;
+      const { w, h } = deskBox(d);
       if (hit(d.x, d.y, d.x + w, d.y + h)) found.push({ kind: "desk", id: d.id });
     }
     for (const f of fixtures) {
@@ -337,6 +453,131 @@ export function FloorPlanEditor({
     setRotating(null);
   }
 
+  // The two long-axis endpoints of a fixture, in map coords, accounting for its
+  // rotation about the centre (CSS rotate). Index 0 = negative end (left/top in
+  // the unrotated frame), 1 = positive end (right/bottom).
+  function fixtureEnds(f: EditFixture): [Point, Point] {
+    const cx = f.x + f.width / 2;
+    const cy = f.y + f.height / 2;
+    const horizontal = f.width >= f.height;
+    const half = (horizontal ? f.width : f.height) / 2;
+    const r = ((f.rotation || 0) * Math.PI) / 180;
+    const cos = Math.cos(r);
+    const sin = Math.sin(r);
+    const local: [Point, Point] = horizontal
+      ? [{ x: -half, y: 0 }, { x: half, y: 0 }]
+      : [{ x: 0, y: -half }, { x: 0, y: half }];
+    return local.map((l) => ({
+      x: cx + l.x * cos - l.y * sin,
+      y: cy + l.x * sin + l.y * cos,
+    })) as [Point, Point];
+  }
+
+  function beginEndDrag(e: React.PointerEvent, f: EditFixture, which: 0 | 1) {
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    onSelectionChange([{ kind: "fixture", id: f.id }]);
+    didDragRef.current = false;
+    const horizontal = f.width >= f.height;
+    setLengthDrag({
+      id: f.id,
+      which,
+      pinned: fixtureEnds(f)[which === 1 ? 0 : 1],
+      horizontal,
+      thickness: horizontal ? f.height : f.width,
+    });
+  }
+
+  // Nearest point on ANY part of another thin fixture within ~12 screen px
+  // (zoom-independent): projecting onto each wall's centreline segment means an
+  // end snaps to another wall's end (a connected run) OR to anywhere along it
+  // (a T-junction), not just to its endpoints.
+  function snapEnd(x: number, y: number, excludeId: string): Point | null {
+    const radius = 12 / (scaleRef.current || 1);
+    let best: Point | null = null;
+    let bestD = radius;
+    for (const f of fixtures) {
+      if (f.id === excludeId || Math.min(f.width, f.height) > 20) continue;
+      const [a, b] = fixtureEnds(f);
+      const { point, dist } = closestPointOnSegment({ x, y }, a, b);
+      if (dist <= bestD) {
+        bestD = dist;
+        best = point;
+      }
+    }
+    return best;
+  }
+
+  // Drag one end of a thin fixture: the pinned end stays put while the wall
+  // re-aims and extends toward the pointer. The free end snaps to a nearby wall
+  // endpoint when close; otherwise length follows the pointer and Shift snaps
+  // the angle to 15°. Length sets the long-axis size, rotation the angle.
+  function endpointGeom(e: React.PointerEvent) {
+    if (!lengthDrag) return null;
+    const { pinned, which, horizontal, thickness } = lengthDrag;
+    const p = toMap(e);
+    const snap = snapEnd(p.x, p.y, lengthDrag.id);
+    let dragged: Point;
+    if (snap) {
+      dragged = snap;
+    } else {
+      const reach = Math.max(16, Math.hypot(p.x - pinned.x, p.y - pinned.y));
+      let ang = Math.atan2(p.y - pinned.y, p.x - pinned.x);
+      if (e.shiftKey) ang = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12);
+      dragged = {
+        x: pinned.x + reach * Math.cos(ang),
+        y: pinned.y + reach * Math.sin(ang),
+      };
+    }
+    const len = Math.max(1, Math.hypot(dragged.x - pinned.x, dragged.y - pinned.y));
+    const center = {
+      x: (pinned.x + dragged.x) / 2,
+      y: (pinned.y + dragged.y) / 2,
+    };
+    // Axis pointing from the negative/top end to the positive/bottom end.
+    const pos = which === 1 ? dragged : pinned;
+    const neg = which === 1 ? pinned : dragged;
+    const ax = pos.x - neg.x;
+    const ay = pos.y - neg.y;
+    const width = horizontal ? len : thickness;
+    const height = horizontal ? thickness : len;
+    // Solve the CSS-rotate angle that lines the local long axis up with (ax,ay).
+    let rot = horizontal
+      ? (Math.atan2(ay, ax) * 180) / Math.PI
+      : (Math.atan2(-ax, ay) * 180) / Math.PI;
+    rot = Math.round(rot);
+    if (rot < 0) rot += 360;
+    return {
+      geom: {
+        x: Math.round(center.x - width / 2),
+        y: Math.round(center.y - height / 2),
+        width: Math.round(width),
+        height: Math.round(height),
+      },
+      rot,
+      snap,
+    };
+  }
+
+  function moveEndDrag(e: React.PointerEvent) {
+    const r = endpointGeom(e);
+    if (!r || !lengthDrag) return;
+    didDragRef.current = true;
+    setSnapAt(r.snap);
+    onFixtureChange(lengthDrag.id, r.geom);
+    onFixtureRotate(lengthDrag.id, r.rot, false);
+  }
+
+  function endEndDrag(e: React.PointerEvent) {
+    const r = endpointGeom(e);
+    if (r && lengthDrag) {
+      onFixtureChange(lengthDrag.id, r.geom);
+      onFixtureRotate(lengthDrag.id, r.rot, true);
+    }
+    setSnapAt(null);
+    setLengthDrag(null);
+  }
+
   function beginDrag(
     e: React.PointerEvent,
     zone: EditZone,
@@ -362,25 +603,45 @@ export function FloorPlanEditor({
     });
   }
 
+  // For a whole-zone translate, snap so the zone's bounding-box top-left lands
+  // on the grid (mirrors how react-rnd snaps a desk's top-left); returns the
+  // effective grid-aligned delta so any grouped entities move in lockstep.
+  function zoneTranslate(dx: number, dy: number) {
+    if (snapGrid <= 0 || !drag) return { ax: dx, ay: dy };
+    const minX = Math.min(...drag.origin.map((p) => p.x));
+    const minY = Math.min(...drag.origin.map((p) => p.y));
+    return { ax: snap(minX + dx) - minX, ay: snap(minY + dy) - minY };
+  }
+
+  function dragZonePoints(dx: number, dy: number, round: boolean): Point[] {
+    const r = round ? Math.round : (v: number) => v;
+    if (!drag) return [];
+    if (drag.vertex === null) {
+      const { ax, ay } = zoneTranslate(dx, dy);
+      return drag.origin.map((p) => ({
+        x: r(clampX(p.x + ax)),
+        y: r(clampY(p.y + ay)),
+      }));
+    }
+    // A single vertex snaps to the grid directly.
+    return drag.origin.map((p, i) =>
+      i === drag.vertex
+        ? { x: r(clampX(snap(p.x + dx))), y: r(clampY(snap(p.y + dy))) }
+        : p,
+    );
+  }
+
   function moveDrag(e: React.PointerEvent) {
     if (!drag) return;
     didDragRef.current = true;
     const scale = scaleRef.current || 1;
     const dx = (e.clientX - drag.startX) / scale;
     const dy = (e.clientY - drag.startY) / scale;
-    const next =
-      drag.vertex === null
-        ? drag.origin.map((p) => ({
-            x: clampX(p.x + dx),
-            y: clampY(p.y + dy),
-          }))
-        : drag.origin.map((p, i) =>
-            i === drag.vertex
-              ? { x: clampX(p.x + dx), y: clampY(p.y + dy) }
-              : p,
-          );
-    onZoneChange(drag.zoneId, next);
-    if (drag.vertex === null && groupRef.current) applyGroupDelta(dx, dy, false);
+    onZoneChange(drag.zoneId, dragZonePoints(dx, dy, false));
+    if (drag.vertex === null && groupRef.current) {
+      const { ax, ay } = zoneTranslate(dx, dy);
+      applyGroupDelta(ax, ay, false);
+    }
   }
 
   function endDrag(e: React.PointerEvent) {
@@ -388,20 +649,10 @@ export function FloorPlanEditor({
     const scale = scaleRef.current || 1;
     const dx = (e.clientX - drag.startX) / scale;
     const dy = (e.clientY - drag.startY) / scale;
-    const rounded =
-      drag.vertex === null
-        ? drag.origin.map((p) => ({
-            x: Math.round(clampX(p.x + dx)),
-            y: Math.round(clampY(p.y + dy)),
-          }))
-        : drag.origin.map((p, i) =>
-            i === drag.vertex
-              ? { x: Math.round(clampX(p.x + dx)), y: Math.round(clampY(p.y + dy)) }
-              : p,
-          );
-    onZoneChange(drag.zoneId, rounded);
+    onZoneChange(drag.zoneId, dragZonePoints(dx, dy, true));
     if (drag.vertex === null && groupRef.current) {
-      applyGroupDelta(dx, dy, false);
+      const { ax, ay } = zoneTranslate(dx, dy);
+      applyGroupDelta(ax, ay, false);
       groupRef.current = null;
     }
     setDrag(null);
@@ -429,34 +680,103 @@ export function FloorPlanEditor({
     );
   }
 
+  // Discs that fill the corner/elbow/T gaps so connected walls read as one run.
+  const wallNodes = wallJunctions(fixtures.filter((f) => f.type === "WALL"));
+
   return (
     <CanvasFrame
       mapWidth={mapWidth}
       mapHeight={mapHeight}
       originX={originX}
       originY={originY}
+      onViewChange={onViewChange}
       zoomable
     >
       {(scale) => {
         scaleRef.current = scale;
         return (
           <>
-            {backgroundUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={backgroundUrl}
-                alt=""
-                className="pointer-events-none absolute object-contain"
+            {/* Background image — interactive (drag/resize) while adjusting,
+                otherwise a static layer behind the plan, drawn at its own
+                world-space rect so it can be lined up with the layout. */}
+            {backgroundUrl &&
+              (bgEdit ? (
+                <Rnd
+                  scale={scale}
+                  lockAspectRatio
+                  position={{ x: bg.x, y: bg.y }}
+                  size={{ width: bg.width, height: bg.height }}
+                  minWidth={40}
+                  minHeight={40}
+                  onDragStop={(_e, p) =>
+                    onBgChange?.({
+                      x: Math.round(p.x),
+                      y: Math.round(p.y),
+                      width: Math.round(bg.width),
+                      height: Math.round(bg.height),
+                    })
+                  }
+                  onResizeStop={(_e, _dir, ref, _delta, pos) =>
+                    onBgChange?.({
+                      x: Math.round(pos.x),
+                      y: Math.round(pos.y),
+                      width: Math.round(ref.offsetWidth),
+                      height: Math.round(ref.offsetHeight),
+                    })
+                  }
+                  style={{ zIndex: 60 }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={backgroundUrl}
+                    alt=""
+                    draggable={false}
+                    className="h-full w-full cursor-move select-none rounded ring-2 ring-brand"
+                    style={{ objectFit: "fill" }}
+                  />
+                </Rnd>
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={backgroundUrl}
+                  alt=""
+                  className="pointer-events-none absolute object-contain"
+                  style={{
+                    left: bg.x,
+                    top: bg.y,
+                    width: bg.width,
+                    height: bg.height,
+                    zIndex: 0,
+                  }}
+                />
+              ))}
+
+            {/* Snap grid overlay (world-space, so it scales with zoom). */}
+            {snapGrid > 0 && (
+              <div
+                className="pointer-events-none absolute"
                 style={{
                   left: originX,
                   top: originY,
                   width: mapWidth,
                   height: mapHeight,
-                  zIndex: 0,
+                  zIndex: 1,
+                  backgroundPosition: `${-originX}px ${-originY}px`,
+                  backgroundImage:
+                    "repeating-linear-gradient(0deg, transparent 0, transparent " +
+                    `${snapGrid - 1}px, rgba(13,148,136,0.10) ${snapGrid - 1}px, rgba(13,148,136,0.10) ${snapGrid}px),` +
+                    "repeating-linear-gradient(90deg, transparent 0, transparent " +
+                    `${snapGrid - 1}px, rgba(13,148,136,0.10) ${snapGrid - 1}px, rgba(13,148,136,0.10) ${snapGrid}px)`,
                 }}
               />
             )}
 
+            {/* Entities layer — made inert while the background is being
+                adjusted so only the image responds to the pointer. */}
+            <div
+              className={bgEdit ? "pointer-events-none" : undefined}
+              style={{ position: "absolute", inset: 0 }}
+            >
             {/* Empty-canvas catcher: left-drag draws a marquee, click deselects. */}
             <div
               className="absolute"
@@ -603,20 +923,20 @@ export function FloorPlanEditor({
               const horizontal = f.width >= f.height;
               const minW = horizontal ? 24 : 8;
               const minH = horizontal ? 8 : 24;
-              // Thin elements (walls/windows) are mostly resize handles, leaving
-              // nowhere to grab for a move. Restrict resizing to the two ends of
-              // the long axis so the body drags, and widen the grab area.
+              // Thin elements (walls/windows) keep react-rnd resizing OFF — its
+              // handles are axis-aligned and ignore rotation, so you can't extend
+              // an angled wall. Instead the whole body drags and dedicated
+              // endpoint handles (below) stretch it along its own axis. Solid
+              // fixtures keep the default react-rnd resize.
               const thin = Math.min(f.width, f.height) <= 20;
-              const enableResizing = thin
-                ? horizontal
-                  ? { left: true, right: true }
-                  : { top: true, bottom: true }
-                : undefined;
+              const enableResizing = thin ? false : undefined;
               return (
                 <Rnd
                   key={f.id}
                   scale={scale}
                   enableResizing={enableResizing}
+                  dragGrid={grid}
+                  resizeGrid={grid}
                   size={{ width: f.width, height: f.height }}
                   position={{ x: f.x, y: f.y }}
                   minWidth={minW}
@@ -635,11 +955,18 @@ export function FloorPlanEditor({
                     if (g) {
                       const o = g.fixtures.get(f.id);
                       if (o) applyGroupDelta(data.x - o.x, data.y - o.y, false);
+                    } else if (align) {
+                      const a = alignSnap(
+                        { x: data.x, y: data.y, w: f.width, h: f.height },
+                        { kind: "fixture", id: f.id },
+                      );
+                      setGuides({ x: a.gx, y: a.gy });
                     }
                   }}
                   onDragStop={(_e, p) => {
                     const g = groupRef.current;
                     groupRef.current = null;
+                    setGuides(null);
                     if (!didDragRef.current) return;
                     if (g) {
                       const o = g.fixtures.get(f.id);
@@ -650,17 +977,27 @@ export function FloorPlanEditor({
                           true,
                         );
                     } else {
+                      let x = Math.round(p.x);
+                      let y = Math.round(p.y);
+                      if (align) {
+                        const a = alignSnap(
+                          { x, y, w: f.width, h: f.height },
+                          { kind: "fixture", id: f.id },
+                        );
+                        x = a.x;
+                        y = a.y;
+                      }
                       onFixtureChange(f.id, {
-                        x: Math.round(p.x),
-                        y: Math.round(p.y),
+                        x,
+                        y,
                         width: f.width,
                         height: f.height,
                       });
                     }
                   }}
-                  onResizeStart={() =>
-                    onSelectionChange([{ kind: "fixture", id: f.id }])
-                  }
+                  onResizeStart={() => {
+                    onSelectionChange([{ kind: "fixture", id: f.id }]);
+                  }}
                   onResizeStop={(_e, _dir, ref, _delta, pos) =>
                     onFixtureChange(f.id, {
                       x: Math.round(pos.x),
@@ -699,11 +1036,33 @@ export function FloorPlanEditor({
                       type={f.type}
                       label={f.label}
                       selected={selected}
+                      width={f.width}
+                      height={f.height}
+                      wallColor={wallColor}
+                      wallOpacity={wallOpacity}
                     />
                   </div>
                 </Rnd>
               );
             })}
+
+            {/* Junction discs — fill the gap where walls meet so a run of
+                connected walls reads as one fluid wall. */}
+            {wallNodes.map((n, i) => (
+              <div
+                key={`wj-${i}`}
+                className="pointer-events-none absolute rounded-full"
+                style={{
+                  left: n.x - n.size / 2,
+                  top: n.y - n.size / 2,
+                  width: n.size,
+                  height: n.size,
+                  background: wallColor ?? "#334155",
+                  opacity: wallOpacity ?? 1,
+                  zIndex: 11,
+                }}
+              />
+            ))}
 
             {/* Drag-to-rotate handle on the single selected fixture. */}
             {selection.length === 1 &&
@@ -765,18 +1124,116 @@ export function FloorPlanEditor({
                 );
               })()}
 
+            {/* Length (endpoint) handles on the single selected thin fixture —
+                drag an end to extend/re-aim the wall along its own axis. */}
+            {selection.length === 1 &&
+              selection[0].kind === "fixture" &&
+              (() => {
+                const f = fixtures.find((x) => x.id === selection[0].id);
+                if (!f || Math.min(f.width, f.height) > 20) return null;
+                const ends = fixtureEnds(f);
+                return (
+                  <>
+                    {ends.map((p, i) => (
+                      <div
+                        key={i}
+                        className="absolute rounded-full bg-white shadow ring-2 ring-brand"
+                        style={{
+                          left: p.x - 8,
+                          top: p.y - 8,
+                          width: 16,
+                          height: 16,
+                          zIndex: 40,
+                          cursor: "crosshair",
+                          touchAction: "none",
+                        }}
+                        title="Drag to extend · hold Shift to snap to 15°"
+                        onPointerDown={(e) => beginEndDrag(e, f, i as 0 | 1)}
+                        onPointerMove={moveEndDrag}
+                        onPointerUp={endEndDrag}
+                      />
+                    ))}
+                  </>
+                );
+              })()}
+
+            {/* Alignment guides — shown while dragging with "Align" on, marking
+                the edge/centre line a moved element is snapping to. */}
+            {guides?.x != null && (
+              <div
+                className="pointer-events-none absolute"
+                style={{
+                  left: guides.x,
+                  top: originY,
+                  width: 1,
+                  height: mapHeight,
+                  background: "#f43f5e",
+                  zIndex: 45,
+                }}
+              />
+            )}
+            {guides?.y != null && (
+              <div
+                className="pointer-events-none absolute"
+                style={{
+                  left: originX,
+                  top: guides.y,
+                  width: mapWidth,
+                  height: 1,
+                  background: "#f43f5e",
+                  zIndex: 45,
+                }}
+              />
+            )}
+
+            {/* Snap target highlight — shown while an endpoint locks onto an
+                adjacent wall end. */}
+            {lengthDrag && snapAt && (
+              <div
+                className="pointer-events-none absolute rounded-full ring-2 ring-emerald-500"
+                style={{
+                  left: snapAt.x - 9,
+                  top: snapAt.y - 9,
+                  width: 18,
+                  height: 18,
+                  background: "rgba(16,185,129,0.25)",
+                  zIndex: 42,
+                }}
+              />
+            )}
+
             {desks.map((d) => {
               const isRoom = d.type === "ROOM";
+              const isTable = d.seats > 1 && !isRoom;
+              const round = d.shape === "ROUND";
               const selected = sel("desk", d.id);
+              const { w, h } = deskBox(d);
+              const seatSize = d.seatSize || SEAT;
+              const seatGap = d.seatGap ?? SEAT_GAP;
+              // Show seat markers for any desk (incl. a single-seat desk, which
+              // gets one chair at its front), but not for rooms.
+              const slots = !isRoom
+                ? seatSlots(
+                    d.shape,
+                    w,
+                    h,
+                    d.seats,
+                    seatSize,
+                    d.endSeats,
+                    seatGap,
+                    d.seatSide,
+                  )
+                : [];
               return (
                 <Rnd
                   key={d.id}
                   scale={scale}
-                  enableResizing={false}
-                  size={{
-                    width: isRoom ? DESK_W + 60 : DESK_W,
-                    height: isRoom ? DESK_H + 70 : DESK_H,
-                  }}
+                  enableResizing={!isRoom}
+                  dragGrid={grid}
+                  resizeGrid={grid}
+                  size={{ width: w, height: h }}
+                  minWidth={40}
+                  minHeight={36}
                   position={{ x: d.x, y: d.y }}
                   onDragStart={(e) => {
                     didDragRef.current = false;
@@ -790,11 +1247,18 @@ export function FloorPlanEditor({
                     if (g) {
                       const o = g.desks.get(d.id);
                       if (o) applyGroupDelta(data.x - o.x, data.y - o.y, false);
+                    } else if (align) {
+                      const a = alignSnap(
+                        { x: data.x, y: data.y, w, h },
+                        { kind: "desk", id: d.id },
+                      );
+                      setGuides({ x: a.gx, y: a.gy });
                     }
                   }}
                   onDragStop={(_e, p) => {
                     const g = groupRef.current;
                     groupRef.current = null;
+                    setGuides(null);
                     if (!didDragRef.current) return;
                     if (g) {
                       const o = g.desks.get(d.id);
@@ -805,27 +1269,50 @@ export function FloorPlanEditor({
                           true,
                         );
                     } else {
-                      onDeskChange(d.id, {
-                        x: Math.round(p.x),
-                        y: Math.round(p.y),
-                      });
+                      let x = Math.round(p.x);
+                      let y = Math.round(p.y);
+                      if (align) {
+                        const a = alignSnap(
+                          { x, y, w, h },
+                          { kind: "desk", id: d.id },
+                        );
+                        x = a.x;
+                        y = a.y;
+                      }
+                      onDeskChange(d.id, { x, y });
                     }
                   }}
+                  onResizeStart={() => {
+                    onSelectionChange([{ kind: "desk", id: d.id }]);
+                  }}
+                  onResizeStop={(_e, _dir, ref, _delta, pos) =>
+                    onDeskChange(d.id, {
+                      x: Math.round(pos.x),
+                      y: Math.round(pos.y),
+                      width: Math.round(ref.offsetWidth),
+                      height: Math.round(ref.offsetHeight),
+                    })
+                  }
                   onClick={(e: React.MouseEvent) => {
                     if (didDragRef.current) return;
                     pick({ kind: "desk", id: d.id }, e.shiftKey);
                   }}
-                  style={{ zIndex: selected ? 30 : 20 }}
+                  style={{ zIndex: selected ? 30 : 20, overflow: "visible" }}
                 >
                   <div
                     className={clsx(
-                      "flex h-full w-full cursor-move flex-col items-center justify-center rounded-lg bg-white text-[11px] font-semibold shadow-sm",
+                      "flex h-full w-full cursor-move flex-col items-center justify-center text-[11px] font-semibold shadow-sm",
+                      round ? "rounded-full" : "rounded-lg",
                       selected
                         ? "ring-2 ring-brand"
                         : "border border-[#cbd5d8]",
                       !d.isAvailable && "opacity-50",
                     )}
-                    style={{ color: "#0b2b33" }}
+                    style={{
+                      color: "#0b2b33",
+                      background: isTable ? "#eef4f4" : "#ffffff",
+                      fontSize: d.fontSize || FONT,
+                    }}
                   >
                     {d.name}
                     {isRoom && (
@@ -833,10 +1320,29 @@ export function FloorPlanEditor({
                         room
                       </span>
                     )}
+                    {/* Seat markers (preview only — not interactive in editor). */}
+                    {slots.map((p, i) => (
+                      <span
+                        key={i}
+                        className={clsx(
+                          "absolute border border-[#cbd5d8] bg-white",
+                          d.seatShape === "RECT"
+                            ? "rounded-[3px]"
+                            : "rounded-full",
+                        )}
+                        style={{
+                          left: p.x - seatSize / 2,
+                          top: p.y - seatSize / 2,
+                          width: seatSize,
+                          height: seatSize,
+                        }}
+                      />
+                    ))}
                   </div>
                 </Rnd>
               );
             })}
+            </div>
           </>
         );
       }}

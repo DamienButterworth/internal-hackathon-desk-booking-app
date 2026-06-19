@@ -24,6 +24,16 @@ export default async function AdminPage() {
     type: b.type,
     x: b.x,
     y: b.y,
+    width: b.width,
+    height: b.height,
+    shape: b.shape,
+    seats: b.seats,
+    seatSize: b.seatSize,
+    seatGap: b.seatGap,
+    seatShape: b.seatShape,
+    seatSide: b.seatSide,
+    fontSize: b.fontSize,
+    endSeats: b.endSeats,
     zoneId: b.zoneId,
     isAvailable: b.isAvailable,
     tags: parseTags(b.tags),
@@ -54,6 +64,14 @@ export default async function AdminPage() {
       mapWidth={premise.mapWidth}
       mapHeight={premise.mapHeight}
       backgroundUrl={premise.backgroundUrl}
+      bg={{
+        x: premise.bgX,
+        y: premise.bgY,
+        width: premise.bgWidth,
+        height: premise.bgHeight,
+      }}
+      wallColor={premise.wallColor}
+      wallOpacity={premise.wallOpacity}
       initialDesks={desks}
       initialZones={zones}
       initialFixtures={fixtures}
