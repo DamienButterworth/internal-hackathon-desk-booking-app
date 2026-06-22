@@ -181,7 +181,7 @@ export function CanvasFrame({
         style={{
           height: mapHeight * fit,
           background:
-            "linear-gradient(#f6fafa,#eef3f4), repeating-linear-gradient(0deg,transparent,transparent 39px,#e6edee 39px,#e6edee 40px), repeating-linear-gradient(90deg,transparent,transparent 39px,#e6edee 39px,#e6edee 40px)",
+            "linear-gradient(var(--canvas-from),var(--canvas-to)), repeating-linear-gradient(0deg,transparent,transparent 39px,var(--canvas-grid) 39px,var(--canvas-grid) 40px), repeating-linear-gradient(90deg,transparent,transparent 39px,var(--canvas-grid) 39px,var(--canvas-grid) 40px)",
         }}
       >
         <div
@@ -199,7 +199,7 @@ export function CanvasFrame({
       </div>
 
       {zoomable && (
-        <div className="absolute bottom-3 right-3 z-50 flex items-center gap-1 rounded-lg border border-line bg-white/95 p-1 shadow-md backdrop-blur">
+        <div className="absolute bottom-3 right-3 z-50 flex items-center gap-1 rounded-lg border border-line bg-card/95 p-1 shadow-md backdrop-blur">
           <button
             className="flex h-7 w-7 items-center justify-center rounded-md text-ink hover:bg-brand-tint disabled:opacity-40"
             title="Zoom out"

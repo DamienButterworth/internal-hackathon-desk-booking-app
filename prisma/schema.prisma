@@ -129,4 +129,9 @@ model Booking {
 model AppSettings {
   id                 String @id @default("singleton")
   autoReleaseMinutes Int    @default(30)
+  // Floor-plan legend colours (desk status). Hex strings.
+  freeColor          String @default("#22c55e")
+  takenColor         String @default("#f59e0b")
+  yoursColor         String @default("#3b82f6")
+  unavailableColor   String @default("#cbd5d8")
 }

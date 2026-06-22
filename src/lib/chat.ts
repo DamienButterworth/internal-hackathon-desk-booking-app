@@ -7,7 +7,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/prisma";
 import { parseTags } from "@/lib/types";
-import { isoDate, weekdayLabel } from "@/lib/time";
+import { isoDate, weekdayLabel, timesOverlap } from "@/lib/time";
 import { sweepExpiredBookings } from "@/lib/release";
 import { createBooking, cancelBooking } from "@/server/actions";
 
@@ -210,6 +210,21 @@ async function createBookingTool(
   });
   if (desks.length !== bookableIds.length) {
     return { error: "One or more desk ids were not found." };
+  }
+
+  // The same person can't hold two desks at overlapping times on a day.
+  const startTime = input.startTime ? String(input.startTime) : "09:00";
+  const endTime = input.endTime ? String(input.endTime) : "17:00";
+  const ownSameDay = await prisma.booking.findMany({
+    where: { bookerId, date, status: { in: ["RESERVED", "CHECKED_IN"] } },
+    select: { startTime: true, endTime: true },
+  });
+  if (
+    ownSameDay.some((b) => timesOverlap(startTime, endTime, b.startTime, b.endTime))
+  ) {
+    return {
+      error: `You already have a desk booked on ${date} at an overlapping time. Cancel it first or choose a non-overlapping slot.`,
+    };
   }
 
   const bookingId = await createBooking({

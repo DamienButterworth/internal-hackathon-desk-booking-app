@@ -79,7 +79,7 @@ export function ChatWidget() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label={open ? "Close assistant" : "Open assistant"}
-        className="fixed bottom-5 right-5 z-50 grid h-14 w-14 place-items-center rounded-full bg-brand text-white shadow-lg transition-transform hover:scale-105 hover:bg-brand-strong"
+        className="fixed bottom-5 right-5 z-50 grid h-14 w-14 place-items-center rounded-full bg-brand text-white shadow-lg transition-transform hover:scale-105 hover:brightness-95"
       >
         {open ? <X size={22} /> : <MessageSquare size={22} />}
       </button>
@@ -148,7 +148,7 @@ export function ChatWidget() {
               onClick={send}
               disabled={loading || !input.trim()}
               aria-label="Send"
-              className="grid h-9 w-9 place-items-center rounded-lg bg-brand text-white transition-colors hover:bg-brand-strong disabled:opacity-40"
+              className="grid h-9 w-9 place-items-center rounded-lg bg-brand text-white transition-colors hover:brightness-95 disabled:opacity-40"
             >
               <Send size={16} />
             </button>

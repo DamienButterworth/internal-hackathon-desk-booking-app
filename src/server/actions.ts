@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { setCurrentBookerCookie } from "@/lib/identity";
 import { sweepExpiredBookings } from "@/lib/release";
 import { bbox, rectToPoints, type Point } from "@/lib/floor";
+import { dateTimeOf, timesOverlap } from "@/lib/time";
 
 function revalidateAll() {
   revalidatePath("/");
@@ -45,6 +46,30 @@ export async function createBooking(input: {
 }) {
   if (!input.bookableIds.length) throw new Error("No desk selected");
   const seatIndex = input.seatIndex ?? 0;
+  const startTime = input.startTime ?? "09:00";
+  const endTime = input.endTime ?? "17:00";
+  // Reject bookings whose start is in the past (1-minute grace for clock skew
+  // and the time it takes to submit). The UI also prevents this client-side.
+  if (dateTimeOf(input.date, startTime).getTime() < Date.now() - 60_000) {
+    throw new Error("That start time is in the past.");
+  }
+  // A person can't hold two desks at once: reject if they already have an
+  // active booking on this date whose time range overlaps the new one.
+  const ownSameDay = await prisma.booking.findMany({
+    where: {
+      bookerId: input.bookerId,
+      date: input.date,
+      status: { in: ["RESERVED", "CHECKED_IN"] },
+    },
+    select: { startTime: true, endTime: true },
+  });
+  if (
+    ownSameDay.some((b) => timesOverlap(startTime, endTime, b.startTime, b.endTime))
+  ) {
+    throw new Error(
+      "You already have a booking that overlaps this time. Cancel it or pick a non-overlapping slot.",
+    );
+  }
   // Guard against double-booking the same seat: a bookable is taken when an
   // active booking already holds this seat (seat 0 for single-seat desks/rooms).
   const clash = await prisma.booking.findFirst({
@@ -61,8 +86,8 @@ export async function createBooking(input: {
       bookerId: input.bookerId,
       date: input.date,
       seatIndex,
-      startTime: input.startTime ?? "09:00",
-      endTime: input.endTime ?? "17:00",
+      startTime,
+      endTime,
       bookingTitle: input.bookingTitle ?? "",
       bookingGuidance: input.bookingGuidance ?? "",
       repeat: input.repeat ?? "NONE",
@@ -521,6 +546,26 @@ export async function updateSettings(autoReleaseMinutes: number) {
     where: { id: "singleton" },
     update: { autoReleaseMinutes },
     create: { id: "singleton", autoReleaseMinutes },
+  });
+  revalidateAll();
+}
+
+export async function updateLegendColors(colors: {
+  free: string;
+  taken: string;
+  yours: string;
+  unavailable: string;
+}) {
+  const data = {
+    freeColor: colors.free,
+    takenColor: colors.taken,
+    yoursColor: colors.yours,
+    unavailableColor: colors.unavailable,
+  };
+  await prisma.appSettings.upsert({
+    where: { id: "singleton" },
+    update: data,
+    create: { id: "singleton", ...data },
   });
   revalidateAll();
 }

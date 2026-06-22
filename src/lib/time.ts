@@ -25,3 +25,15 @@ export function weekdayLabel(date: string): string {
   const [y, m, d] = date.split("-").map(Number);
   return WEEKDAYS[new Date(y, (m ?? 1) - 1, d ?? 1).getDay()];
 }
+
+// Two "HH:MM" time ranges overlap when each starts before the other ends.
+// Adjacent ranges (one ends exactly when the next starts) do NOT overlap.
+// String comparison is valid because times are zero-padded 24h "HH:MM".
+export function timesOverlap(
+  aStart: string,
+  aEnd: string,
+  bStart: string,
+  bEnd: string,
+): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}

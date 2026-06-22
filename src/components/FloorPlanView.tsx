@@ -6,6 +6,7 @@ import { CanvasFrame } from "./CanvasFrame";
 import { FixtureShape } from "./FixtureShape";
 import {
   DESK_STATE_STYLE,
+  buildDeskStateStyle,
   SEAT,
   SEAT_GAP,
   FONT,
@@ -17,7 +18,7 @@ import {
   labelAnchor,
   wallJunctions,
 } from "@/lib/floor";
-import type { DeskState, Point } from "@/lib/floor";
+import type { DeskState, LegendColors, Point } from "@/lib/floor";
 
 export type ZoneVM = {
   id: string;
@@ -70,6 +71,7 @@ export function FloorPlanView({
   fixtures = [],
   wallColor,
   wallOpacity,
+  legendColors,
   onSelectSeat,
 }: {
   mapWidth: number;
@@ -82,8 +84,14 @@ export function FloorPlanView({
   // Global wall appearance.
   wallColor?: string;
   wallOpacity?: number;
+  // Custom desk-status legend colours; falls back to defaults when omitted.
+  legendColors?: LegendColors;
   onSelectSeat?: (id: string, seatIndex: number) => void;
 }) {
+  const stateStyle = useMemo(
+    () => (legendColors ? buildDeskStateStyle(legendColors) : DESK_STATE_STYLE),
+    [legendColors],
+  );
   // Size the canvas tightly around the actual content (desks/zones/fixtures and
   // the background image) so the plan is maximised in the view — no premise-box
   // floor and no forced origin, which previously left empty margins.
@@ -282,7 +290,7 @@ export function FloorPlanView({
                   {(d.seatVMs ?? []).map((seat, i) => {
                     const p = slots[i];
                     if (!p) return null;
-                    const ss = DESK_STATE_STYLE[seat.state];
+                    const ss = stateStyle[seat.state];
                     const interactive =
                       seat.state === "available" ||
                       seat.state === "mine" ||
@@ -325,25 +333,11 @@ export function FloorPlanView({
             }
 
             // Single desk / room.
-            const s = DESK_STATE_STYLE[d.state];
+            const s = stateStyle[d.state];
             const interactive =
               d.state === "available" ||
               d.state === "mine" ||
               d.state === "selected";
-            // A single desk shows one chair at its front (rooms don't).
-            const seatPos =
-              d.type === "DESK"
-                ? seatSlots(
-                    d.shape ?? "RECT",
-                    w,
-                    h,
-                    1,
-                    seatSize,
-                    false,
-                    seatGap,
-                    d.seatSide,
-                  )[0]
-                : null;
             return (
               <button
                 key={d.id}
@@ -368,34 +362,11 @@ export function FloorPlanView({
                 }}
                 title={d.subtitle}
               >
-                <span className="flex items-center gap-1">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full"
-                    style={{ background: s.dot }}
-                  />
-                  {d.name}
-                </span>
+                <span>{d.name}</span>
                 {d.subtitle && (
                   <span className="max-w-[90%] truncate text-[9px] font-medium opacity-80">
                     {d.subtitle}
                   </span>
-                )}
-                {seatPos && (
-                  <span
-                    aria-hidden
-                    className={clsx(
-                      "pointer-events-none absolute",
-                      seatRounded,
-                    )}
-                    style={{
-                      left: seatPos.x - seatSize / 2,
-                      top: seatPos.y - seatSize / 2,
-                      width: seatSize,
-                      height: seatSize,
-                      background: s.bg,
-                      border: `1.5px solid ${s.border}`,
-                    }}
-                  />
                 )}
               </button>
             );

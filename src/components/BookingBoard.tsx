@@ -11,8 +11,15 @@ import {
   type FixtureVM,
 } from "./FloorPlanView";
 import { BookingDialog } from "./BookingDialog";
+import { FixtureIcon } from "./FixtureIcon";
 import { ZONE_META, type ZoneType } from "@/lib/types";
-import type { DeskState } from "@/lib/floor";
+import { fixtureMeta, FIXTURE_TYPES } from "@/lib/fixtures";
+import {
+  buildDeskStateStyle,
+  DEFAULT_LEGEND_COLORS,
+  type DeskState,
+  type LegendColors,
+} from "@/lib/floor";
 import { weekdayLabel } from "@/lib/time";
 import type { Occupancy } from "@/app/book/page";
 
@@ -65,6 +72,7 @@ export function BookingBoard({
   fixtures = [],
   occupancy,
   dates,
+  legendColors = DEFAULT_LEGEND_COLORS,
 }: {
   me: { id: string; name: string; team: string };
   mapWidth: number;
@@ -78,8 +86,13 @@ export function BookingBoard({
   fixtures?: FixtureVM[];
   occupancy: Occupancy;
   dates: string[];
+  legendColors?: LegendColors;
 }) {
   const router = useRouter();
+  const legendStyle = useMemo(
+    () => buildDeskStateStyle(legendColors),
+    [legendColors],
+  );
   const [date, setDate] = useState(dates[0]);
   const [zoneFilter, setZoneFilter] = useState<string>("ALL");
   const [tagFilters, setTagFilters] = useState<string[]>([]);
@@ -248,6 +261,12 @@ export function BookingBoard({
     () => [...new Set(zones.map((z) => z.type))],
     [zones],
   );
+  // Fixture types actually placed on the map, in catalogue order, for the
+  // legend so people know what each icon means.
+  const presentFixtureTypes = useMemo(() => {
+    const set = new Set(fixtures.map((f) => f.type));
+    return FIXTURE_TYPES.filter((t) => set.has(t));
+  }, [fixtures]);
 
   const openDesk = openSeat
     ? desks.find((d) => d.id === openSeat.deskId)
@@ -302,6 +321,7 @@ export function BookingBoard({
           zones={zones}
           desks={deskVMs}
           fixtures={fixtures}
+          legendColors={legendColors}
           onSelectSeat={(deskId, seatIndex) => setOpenSeat({ deskId, seatIndex })}
         />
 
@@ -409,13 +429,63 @@ export function BookingBoard({
 
           {/* Legend */}
           <div className="card p-4">
-            <h3 className="label mb-2">Legend</h3>
+            <h3 className="label mb-2">Desk status</h3>
             <div className="grid grid-cols-2 gap-2 text-xs text-ink-soft">
-              <Legend color="#14b8a6" label="Free" />
-              <Legend color="#f59e0b" label="Taken" />
-              <Legend color="#0d9488" label="Yours" filled />
-              <Legend color="#cbd5d8" label="Unavailable" />
+              <Legend
+                fill={legendStyle.available.bg}
+                border={legendStyle.available.border}
+                label="Free"
+              />
+              <Legend
+                fill={legendStyle.booked.bg}
+                border={legendStyle.booked.border}
+                label="Taken"
+              />
+              <Legend
+                fill={legendStyle.mine.bg}
+                border={legendStyle.mine.border}
+                label="Yours"
+              />
+              <Legend
+                fill={legendStyle.unavailable.bg}
+                border={legendStyle.unavailable.border}
+                label="Unavailable"
+              />
             </div>
+
+            {presentZoneTypes.length > 0 && (
+              <>
+                <h3 className="label mb-2 mt-4">Zones</h3>
+                <div className="grid grid-cols-2 gap-2 text-xs text-ink-soft">
+                  {presentZoneTypes.map((t) => {
+                    const meta = ZONE_META[t as ZoneType];
+                    return (
+                      <span key={t} className="flex items-center gap-1.5">
+                        <span
+                          className="h-3 w-3 rounded-sm border"
+                          style={{
+                            background: meta?.tint,
+                            borderColor: meta?.color,
+                          }}
+                        />
+                        {meta?.label ?? t}
+                      </span>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {presentFixtureTypes.length > 0 && (
+              <>
+                <h3 className="label mb-2 mt-4">On the map</h3>
+                <div className="grid grid-cols-2 gap-2 text-xs text-ink-soft">
+                  {presentFixtureTypes.map((t) => (
+                    <FixtureLegend key={t} type={t} />
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </aside>
       </div>
@@ -440,24 +510,60 @@ export function BookingBoard({
 }
 
 function Legend({
-  color,
+  fill,
+  border,
   label,
-  filled,
 }: {
-  color: string;
+  fill: string;
+  border: string;
   label: string;
-  filled?: boolean;
 }) {
   return (
     <span className="flex items-center gap-1.5">
       <span
         className="h-3 w-3 rounded"
         style={{
-          background: filled ? color : "#fff",
-          border: `1.5px solid ${color}`,
+          background: fill,
+          border: `1.5px solid ${border}`,
         }}
       />
       {label}
+    </span>
+  );
+}
+
+// One legend row for a fixture type, mirroring how it's drawn on the map:
+// walls/windows as a coloured bar, everything else as its icon glyph.
+function FixtureLegend({ type }: { type: string }) {
+  const m = fixtureMeta(type);
+  return (
+    <span className="flex items-center gap-1.5">
+      <span
+        className="grid h-5 w-5 shrink-0 place-items-center rounded"
+        style={{
+          background: m.kind === "icon" ? m.fill ?? "#fff" : "transparent",
+          border: m.kind === "icon" ? `1.5px solid ${m.color}` : undefined,
+          color: m.color,
+        }}
+      >
+        {m.kind === "wall" ? (
+          <span
+            className="h-1.5 w-4 rounded-sm"
+            style={{ background: m.color }}
+          />
+        ) : m.kind === "window" ? (
+          <span
+            className="h-2.5 w-4 rounded-sm border-2"
+            style={{
+              borderColor: m.color,
+              background: "rgba(56,189,248,0.18)",
+            }}
+          />
+        ) : (
+          <FixtureIcon name={m.icon} size={12} />
+        )}
+      </span>
+      {m.label}
     </span>
   );
 }

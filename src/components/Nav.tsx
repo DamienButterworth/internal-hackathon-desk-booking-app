@@ -4,12 +4,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   CalendarCheck,
+  CalendarDays,
   LayoutDashboard,
   Map,
   Settings,
   BarChart3,
 } from "lucide-react";
 import clsx from "clsx";
+import { ThemeToggle } from "./ThemeToggle";
 
 type BookerLite = {
   id: string;
@@ -20,6 +22,7 @@ type BookerLite = {
 
 const userLinks = [
   { href: "/book", label: "Book a desk", icon: Map },
+  { href: "/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/bookings", label: "My bookings", icon: CalendarCheck },
   { href: "/stats", label: "Insights", icon: BarChart3 },
 ];
@@ -72,7 +75,8 @@ export function Nav({ booker }: { booker: BookerLite }) {
           })}
         </nav>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <ThemeToggle />
           {booker ? (
             <Link
               href="/"

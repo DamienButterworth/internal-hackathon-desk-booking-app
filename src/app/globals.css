@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Drive the `dark:` variant off our `.dark` class (set on <html>) rather than
+   the OS preference, so the in-app toggle controls it. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ------------------------------------------------------------------ */
 /* Deskly — Mercator-inspired theme.                                   */
 /* Clean teal/navy corporate palette. Swap the hex values below to     */
@@ -18,9 +22,37 @@
   --color-accent: #f59e0b; /* amber — reserved / attention */
   --color-danger: #ef4444;
   --color-good: #14b8a6;
+  --color-input: #ffffff; /* form field background */
+
+  /* Floor-plan canvas surface (grid paper look) */
+  --canvas-from: #f6fafa;
+  --canvas-to: #eef3f4;
+  --canvas-grid: #e6edee;
 
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --radius: 0.75rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Dark mode — overrides the same tokens, so every utility/component   */
+/* reading them (bg-card, text-ink, border-line…) flips automatically. */
+/* Toggled by adding `.dark` to <html>.                                */
+/* ------------------------------------------------------------------ */
+.dark {
+  --color-ink: #e8f0f1;
+  --color-ink-soft: #aebfc2;
+  --color-muted: #7c9296;
+  --color-line: #25393e;
+  --color-surface: #0b1618;
+  --color-card: #13242a;
+  --color-brand: #14b8a6;
+  --color-brand-strong: #5eead4; /* light teal — emphasis text on dark */
+  --color-brand-tint: #0f312e; /* dark teal panel behind brand text */
+  --color-input: #0e1d21;
+
+  --canvas-from: #0e1c20;
+  --canvas-to: #0b1619;
+  --canvas-grid: #1b2d32;
 }
 
 * {
@@ -66,7 +98,7 @@ body {
     color: #fff;
   }
   .btn-primary:hover {
-    background: var(--color-brand-strong);
+    filter: brightness(0.93);
   }
   .btn-ghost {
     background: transparent;
@@ -98,7 +130,7 @@ body {
     width: 100%;
     border-radius: 0.6rem;
     border: 1px solid var(--color-line);
-    background: #fff;
+    background: var(--color-input);
     padding: 0.5rem 0.7rem;
     font-size: 0.875rem;
     color: var(--color-ink);
@@ -116,6 +148,20 @@ body {
   }
 }
 
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.toast-item {
+  animation: toast-in 0.18s ease-out;
+}
+
 /* Thin, tidy scrollbars */
 ::-webkit-scrollbar {
   width: 10px;
@@ -125,4 +171,7 @@ body {
   background: #cdd9da;
   border-radius: 999px;
   border: 2px solid var(--color-surface);
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #2c4248;
 }

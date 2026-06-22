@@ -136,47 +136,108 @@ export type DeskState =
   | "unavailable" // admin disabled it
   | "dimmed"; // filtered out
 
-export const DESK_STATE_STYLE: Record<
-  DeskState,
-  { bg: string; border: string; text: string; dot: string }
-> = {
-  available: {
-    bg: "#ffffff",
-    border: "#cbd5d8",
-    text: "#0b2b33",
-    dot: "#14b8a6",
-  },
-  selected: {
-    bg: "#0d9488",
-    border: "#0f766e",
-    text: "#ffffff",
-    dot: "#ffffff",
-  },
-  mine: {
-    bg: "#d8f1ee",
-    border: "#0d9488",
-    text: "#0f766e",
-    dot: "#0d9488",
-  },
-  booked: {
-    bg: "#f1f5f6",
-    border: "#dbe3e5",
-    text: "#94a3a8",
-    dot: "#f59e0b",
-  },
-  unavailable: {
-    bg: "#f8fafa",
-    border: "#e2e9ea",
-    text: "#c2cccf",
-    dot: "#cbd5d8",
-  },
-  dimmed: {
-    bg: "#ffffff",
-    border: "#e8eded",
-    text: "#c2cccf",
-    dot: "#dde5e6",
-  },
+export type DeskStateStyle = {
+  bg: string;
+  border: string;
+  text: string;
+  dot: string;
 };
+
+// The four user-configurable legend colours that drive desk appearance.
+export type LegendColors = {
+  free: string;
+  taken: string;
+  yours: string;
+  unavailable: string;
+};
+
+export const DEFAULT_LEGEND_COLORS: LegendColors = {
+  free: "#22c55e",
+  taken: "#f59e0b",
+  yours: "#3b82f6",
+  unavailable: "#cbd5d8",
+};
+
+// --- Small hex colour helpers (no deps) -------------------------------------
+function clampByte(n: number) {
+  return Math.max(0, Math.min(255, Math.round(n)));
+}
+function parseHex(hex: string): [number, number, number] {
+  let h = hex.replace("#", "").trim();
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const int = parseInt(h, 16);
+  return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
+}
+function toHex(r: number, g: number, b: number) {
+  return (
+    "#" +
+    [r, g, b]
+      .map((n) => clampByte(n).toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+// Mix a colour toward white (amount>0) — for soft tinted fills.
+function tint(hex: string, amount: number) {
+  const [r, g, b] = parseHex(hex);
+  return toHex(
+    r + (255 - r) * amount,
+    g + (255 - g) * amount,
+    b + (255 - b) * amount,
+  );
+}
+// Mix a colour toward black (amount>0) — for borders and readable text.
+function shade(hex: string, amount: number) {
+  const [r, g, b] = parseHex(hex);
+  return toHex(r * (1 - amount), g * (1 - amount), b * (1 - amount));
+}
+
+// Build the full per-state desk style map from the four legend colours.
+// Free/Taken/Unavailable get a soft tinted fill with the legend colour as a
+// strong border; Yours/Selected get a solid fill with white text.
+export function buildDeskStateStyle(
+  c: LegendColors,
+): Record<DeskState, DeskStateStyle> {
+  return {
+    available: {
+      bg: tint(c.free, 0.82),
+      border: c.free,
+      text: shade(c.free, 0.55),
+      dot: c.free,
+    },
+    selected: {
+      bg: c.free,
+      border: shade(c.free, 0.25),
+      text: "#ffffff",
+      dot: "#ffffff",
+    },
+    mine: {
+      bg: c.yours,
+      border: shade(c.yours, 0.25),
+      text: "#ffffff",
+      dot: "#ffffff",
+    },
+    booked: {
+      bg: tint(c.taken, 0.8),
+      border: c.taken,
+      text: shade(c.taken, 0.5),
+      dot: c.taken,
+    },
+    unavailable: {
+      bg: tint(c.unavailable, 0.45),
+      border: c.unavailable,
+      text: shade(c.unavailable, 0.4),
+      dot: c.unavailable,
+    },
+    dimmed: {
+      bg: "#ffffff",
+      border: "#e8eded",
+      text: "#c2cccf",
+      dot: "#dde5e6",
+    },
+  };
+}
+
+export const DESK_STATE_STYLE = buildDeskStateStyle(DEFAULT_LEGEND_COLORS);
 
 export function zoneVisual(type: string) {
   return ZONE_META[(type as ZoneType)] ?? ZONE_META.FOCUS;

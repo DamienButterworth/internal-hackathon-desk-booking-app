@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentBooker } from "@/lib/identity";
 import { sweepExpiredBookings } from "@/lib/release";
 import { parseTags } from "@/lib/types";
-import { zonePoints } from "@/lib/floor";
+import { zonePoints, DEFAULT_LEGEND_COLORS } from "@/lib/floor";
 import { isoDate } from "@/lib/time";
 import { BookingBoard } from "@/components/BookingBoard";
 import { AutoReleasePoller } from "@/components/AutoReleasePoller";
@@ -19,14 +19,24 @@ export default async function BookPage() {
   if (!booker) redirect("/");
   await sweepExpiredBookings();
 
-  const premise = await prisma.premise.findFirst({
-    include: {
-      zones: { orderBy: { name: "asc" } },
-      bookables: { orderBy: { name: "asc" } },
-      fixtures: true,
-    },
-  });
+  const [premise, settings] = await Promise.all([
+    prisma.premise.findFirst({
+      include: {
+        zones: { orderBy: { name: "asc" } },
+        bookables: { orderBy: { name: "asc" } },
+        fixtures: true,
+      },
+    }),
+    prisma.appSettings.findUnique({ where: { id: "singleton" } }),
+  ]);
   if (!premise) redirect("/");
+
+  const legendColors = {
+    free: settings?.freeColor ?? DEFAULT_LEGEND_COLORS.free,
+    taken: settings?.takenColor ?? DEFAULT_LEGEND_COLORS.taken,
+    yours: settings?.yoursColor ?? DEFAULT_LEGEND_COLORS.yours,
+    unavailable: settings?.unavailableColor ?? DEFAULT_LEGEND_COLORS.unavailable,
+  };
 
   // 14-day window of active bookings, so date switching is instant client-side.
   const start = new Date();
@@ -116,6 +126,7 @@ export default async function BookPage() {
         fixtures={fixtures}
         occupancy={occupancy}
         dates={dates}
+        legendColors={legendColors}
       />
     </>
   );

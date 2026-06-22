@@ -1,9 +1,25 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { X, MapPin, Tag, Check } from "lucide-react";
 import { createBooking } from "@/server/actions";
+import { useToast } from "./Toast";
 import { ZONE_META, type ZoneType } from "@/lib/types";
+import { isoDate } from "@/lib/time";
+
+const pad = (n: number) => String(n).padStart(2, "0");
+const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+// Round "HH:MM" up to the next quarter hour, kept within the same day.
+function ceilQuarter(d: Date) {
+  let mins = d.getHours() * 60 + d.getMinutes();
+  mins = Math.min(Math.ceil(mins / 15) * 15, 23 * 60 + 45);
+  return `${pad(Math.floor(mins / 60))}:${pad(mins % 60)}`;
+}
+function addMinutes(hm: string, delta: number) {
+  const [h, m] = hm.split(":").map(Number);
+  const t = Math.min(h * 60 + m + delta, 23 * 60 + 59);
+  return `${pad(Math.floor(t / 60))}:${pad(t % 60)}`;
+}
 
 export type DeskForDialog = {
   id: string;
@@ -32,31 +48,66 @@ export function BookingDialog({
   onClose: () => void;
   onBooked: () => void;
 }) {
-  const [startTime, setStartTime] = useState("09:00");
-  const [endTime, setEndTime] = useState("17:00");
+  // Anchor "now" once for this dialog. When booking today, the slot starts at
+  // the current time (rounded up to the next quarter) and can't be set earlier.
+  const now = useMemo(() => new Date(), []);
+  const isToday = date === isoDate(now);
+  const earliest = isToday ? hhmm(now) : "00:00";
+  const defaultStart = isToday ? ceilQuarter(now) : "09:00";
+  const defaultEnd =
+    isToday && defaultStart >= "16:00" ? addMinutes(defaultStart, 60) : "17:00";
+
+  const [startTime, setStartTime] = useState(defaultStart);
+  const [endTime, setEndTime] = useState(defaultEnd);
   const [title, setTitle] = useState("");
   const [guidance, setGuidance] = useState("");
   const [repeat, setRepeat] = useState("NONE");
   const [pending, startTransition] = useTransition();
+  const toast = useToast();
 
   const zone = desk.zoneType
     ? ZONE_META[(desk.zoneType as ZoneType)]
     : null;
 
+  const pastStart = isToday && startTime < earliest;
+  const badRange = endTime <= startTime;
+  const error = pastStart
+    ? "That start time has already passed — pick a later time."
+    : badRange
+      ? "End time must be after the start time."
+      : null;
+
+  function changeStart(v: string) {
+    setStartTime(v);
+    // Keep the end after the start so the range stays valid.
+    if (endTime <= v) setEndTime(addMinutes(v, 60));
+  }
+
   function confirm() {
+    if (error) return;
     startTransition(async () => {
-      await createBooking({
-        bookerId: me.id,
-        bookableIds: [desk.id],
-        date,
-        seatIndex,
-        startTime,
-        endTime,
-        bookingTitle: title,
-        bookingGuidance: guidance,
-        repeat,
-      });
-      onBooked();
+      try {
+        await createBooking({
+          bookerId: me.id,
+          bookableIds: [desk.id],
+          date,
+          seatIndex,
+          startTime,
+          endTime,
+          bookingTitle: title,
+          bookingGuidance: guidance,
+          repeat,
+        });
+        toast(`Booked ${desk.name} for ${date}.`, "success");
+        onBooked();
+      } catch (e) {
+        toast(
+          e instanceof Error && e.message
+            ? e.message
+            : "Couldn't complete the booking — please try again.",
+          "error",
+        );
+      }
     });
   }
 
@@ -115,7 +166,8 @@ export function BookingDialog({
                   type="time"
                   className="field mt-1"
                   value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
+                  min={earliest}
+                  onChange={(e) => changeStart(e.target.value)}
                 />
               </div>
               <div>
@@ -124,10 +176,14 @@ export function BookingDialog({
                   type="time"
                   className="field mt-1"
                   value={endTime}
+                  min={startTime}
                   onChange={(e) => setEndTime(e.target.value)}
                 />
               </div>
             </div>
+            {error && (
+              <p className="mt-2 text-xs font-medium text-danger">{error}</p>
+            )}
             <div className="mt-3">
               <label className="label">Title (optional)</label>
               <input
@@ -166,7 +222,7 @@ export function BookingDialog({
               <button
                 className="btn btn-primary"
                 onClick={confirm}
-                disabled={pending}
+                disabled={pending || !!error}
               >
                 <Check size={15} />
                 {pending ? "Booking…" : `Book for ${date}`}

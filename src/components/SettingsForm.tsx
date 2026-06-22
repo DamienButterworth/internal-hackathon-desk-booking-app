@@ -2,20 +2,38 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AlarmClock, Building2, Check, RotateCcw } from "lucide-react";
+import { AlarmClock, Building2, Check, Palette, RotateCcw } from "lucide-react";
 import clsx from "clsx";
-import { updateSettings, updatePremise } from "@/server/actions";
+import {
+  updateSettings,
+  updatePremise,
+  updateLegendColors,
+} from "@/server/actions";
+import {
+  buildDeskStateStyle,
+  DEFAULT_LEGEND_COLORS,
+  type LegendColors,
+} from "@/lib/floor";
 
 const PRESETS = [1, 5, 15, 30, 60];
+
+const LEGEND_FIELDS: { key: keyof LegendColors; label: string }[] = [
+  { key: "free", label: "Free" },
+  { key: "taken", label: "Taken" },
+  { key: "yours", label: "Yours" },
+  { key: "unavailable", label: "Unavailable" },
+];
 
 export function SettingsForm({
   premise,
   autoReleaseMinutes,
+  legendColors,
   reclaimedCount,
   deskCount,
 }: {
   premise: { id: string; name: string; address: string };
   autoReleaseMinutes: number;
+  legendColors: LegendColors;
   reclaimedCount: number;
   deskCount: number;
 }) {
@@ -23,13 +41,23 @@ export function SettingsForm({
   const [minutes, setMinutes] = useState(autoReleaseMinutes);
   const [name, setName] = useState(premise.name);
   const [address, setAddress] = useState(premise.address);
+  const [colors, setColors] = useState<LegendColors>(legendColors);
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
+
+  const preview = buildDeskStateStyle(colors);
+  const previewByKey = {
+    free: preview.available,
+    taken: preview.booked,
+    yours: preview.mine,
+    unavailable: preview.unavailable,
+  } satisfies Record<keyof LegendColors, (typeof preview)["available"]>;
 
   function save() {
     startTransition(async () => {
       await updateSettings(minutes);
       await updatePremise(premise.id, { name, address });
+      await updateLegendColors(colors);
       setSaved(true);
       router.refresh();
       setTimeout(() => setSaved(false), 2000);
@@ -110,6 +138,63 @@ export function SettingsForm({
             />
           </div>
         </div>
+      </section>
+
+      <section className="card mb-6 p-5">
+        <h2 className="flex items-center gap-2 font-semibold text-ink">
+          <Palette size={17} className="text-brand" />
+          Floor-plan legend colours
+        </h2>
+        <p className="mt-1 text-sm text-muted">
+          These colour the desks on the booking floor plan by status. Use
+          distinct hues so they stay easy to tell apart.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {LEGEND_FIELDS.map(({ key, label }) => {
+            const p = previewByKey[key];
+            return (
+              <div
+                key={key}
+                className="flex items-center gap-3 rounded-lg border border-line p-3"
+              >
+                <input
+                  type="color"
+                  value={colors[key]}
+                  onChange={(e) =>
+                    setColors((c) => ({ ...c, [key]: e.target.value }))
+                  }
+                  className="h-9 w-9 shrink-0 cursor-pointer rounded border border-line bg-transparent p-0"
+                  aria-label={`${label} colour`}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-ink">{label}</div>
+                  <div className="font-mono text-xs uppercase text-muted">
+                    {colors[key]}
+                  </div>
+                </div>
+                {/* Live preview of how a desk in this state will look. */}
+                <span
+                  className="flex h-8 w-16 shrink-0 items-center justify-center rounded text-[10px] font-semibold"
+                  style={{
+                    background: p.bg,
+                    border: `1.5px solid ${p.border}`,
+                    color: p.text,
+                  }}
+                >
+                  Desk
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={() => setColors(DEFAULT_LEGEND_COLORS)}
+          className="btn btn-ghost mt-3"
+        >
+          <RotateCcw size={14} />
+          Reset to defaults
+        </button>
       </section>
 
       <button className="btn btn-primary" onClick={save} disabled={pending}>
